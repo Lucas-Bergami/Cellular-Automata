@@ -1,4 +1,5 @@
-// Represents a single state in the CA
+use rand::Rng;
+// Repreuse rand::Rng;sents a single state in the CA
 #[derive(Debug, Clone, PartialEq)]
 pub struct CAState {
     pub id: u8, // Simple numeric ID, also used as index
@@ -57,7 +58,6 @@ impl std::fmt::Display for RelationalOperator {
     }
 }
 
-
 // Represents a single transition rule
 // Example: IF current_state_id is X AND (count of neighbors with Y is OP Z) THEN next_state_id is W
 #[derive(Debug, Clone)]
@@ -82,14 +82,25 @@ pub struct CAGrid {
 }
 
 impl CAGrid {
-    pub fn new(width: usize, height: usize, default_state_id: u8) -> Self {
+    pub fn new(width: usize, height: usize) -> Self {
+        //todo: mudar para gerar aleatoriamente de
+        //acordo com os estados disponiveis e não somente 0 e 1
+        let mut rng = rand::rng();
+
+        let cells = (0..height)
+            .map(|_| {
+                (0..width)
+                    .map(|_| if rng.random_bool(0.5) { 1 } else { 0 })
+                    .collect()
+            })
+            .collect();
+
         CAGrid {
             width,
             height,
-            cells: vec![vec![default_state_id; width]; height],
+            cells,
         }
     }
-
     // Basic Moore neighborhood count
     pub fn count_neighbors(&self, r: usize, c: usize, target_state_id: u8) -> u8 {
         let mut count = 0;
@@ -110,5 +121,24 @@ impl CAGrid {
             }
         }
         count
+    }
+    pub fn get_state(&self, r: usize, c: usize) -> Option<u8> {
+        self.cells
+            .get(r)
+            .and_then(|row_vec| row_vec.get(c))
+            .copied()
+    }
+
+    pub fn set_state(&mut self, r: usize, c: usize, state_id: u8) {
+        if r < self.height && c < self.width {
+            self.cells[r][c] = state_id;
+        }
+    }
+}
+
+// Need to implement Display for CAState for PickList
+impl std::fmt::Display for CAState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} (ID: {})", self.name, self.id)
     }
 }
