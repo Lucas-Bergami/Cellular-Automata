@@ -1,0 +1,107 @@
+ if current is dead and count of alive == 0 then next is alive
+
+
+RESERVED STATE and STATE LOGIC NUMBER then STATE
+
+WHEN dead AND alive > 2 THEN alive
+
+*WHEN dead & alive > 2 THEN alive
+
+*WHEN dead & alive > 2 -> alive
+
+WHEN(dead, alive > 2) -> alive
+
+WHEN(dead, alive > 2) -> alive
+
+
+
+WHEN ID & ID > 2 THEN ID;  //ID -> GROUP, STATE
+
+
+WHEN ID & ID > 2 -> ID;
+
+WHEN GROUP[3] & GROUP[3] > 2 -> GROUP[3]
+/*
+Cria-se 3 regras (todos mesmo tamanho)
+
+WHEN GROUP[1] & GROUP[1] > 2 -> GROUP[1]
+WHEN GROUP[2] & GROUP[2] > 2 -> GROUP[2]
+WHEN GROUP[3] & GROUP[3] > 2 -> GROUP[3]
+*/
+
+
+WHEN GROUP[3] & GROUP[3] > 2 -> STATE
+/*
+Cria-se 3 regras 
+
+WHEN GROUP[1] & GROUP[1] > 2 -> STATE
+WHEN GROUP[2] & GROUP[2] > 2 -> STATE
+WHEN GROUP[3] & GROUP[3] > 2 -> STATE
+*/
+
+
+WHEN GROUP[3] & STATE > 2 -> STATE
+/*
+Cria-se 3 regras 
+
+WHEN GROUP[1] & STATE  > 2 -> STATE
+WHEN GROUP[2] & STATE  > 2 -> STATE
+WHEN GROUP[3] & STATE  > 2 -> STATE
+*/
+
+
+//TODO: Aceitar mais de uma condição de números de vizinhos
+
+//Declaração de STATE
+STATE{
+    ID,
+    alive,
+    dead(NUMBER, NUMBER, NUMBER),
+    asleep
+  }
+
+STATE ID;
+STATE alive;
+STATE dead(NUMBER, NUMBER, NUMBER);//Define a cor, default aleatória menos as definidas[0, 255]
+STATE asleep;
+//-------------
+
+//Declaração de grupos de STATE
+GROUP ID {
+    alive,
+    asleep,
+    STATE ID //Pode ser criado
+  }
+
+//adicionar métodos list, push, pop?
+
+
+HEIGHT NUMBER
+WIDTH NUMBER
+
+
+
+            tokens
+WHEN        rule
+STATE       state
+THEN||->    result
+AND||&      neighbor
+GROUP       group
+NUMBER      int_literal [0-9]*
+==	        OP_EQ
+!=        	OP_NEQ
+<	          OP_LT
+>	          OP_GT
+<=	        OP_LE
+>=	        OP_GE	
+{	          LBRACE
+}	          RBRACE
+.	          DOT
+,	          COMMA
+;	          SEMICOLON
+:	          COLON
+(	          LPAREN
+)	          RPAREN
+/           OP_DIV
+*           OP_MUL
+ID          [a-zA-Z_][a-zA-Z0-9_]*
