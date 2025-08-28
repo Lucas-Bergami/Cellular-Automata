@@ -1,0 +1,15 @@
+GLC:
+
+S -> Estados Grupos Tamanho Regras
+Estados ->  STATE  { Lista_de_Estados  }
+Lista_de_Estados -> ID Cor Lista2
+Cor -> ( INT_CONST ,  INT_CONST,  INT_CONST ) |  cadeia_vazia
+Grupos ->  GROUP  ID { Lista_de_Grupos }
+Lista_de_Grupos ->  ID  Lista2
+Lista2 -> ,  ID  Cor  Lista2  |   cadeia_vazia
+
+Tamanho -> WIDTH  INT_CONST  HEIGHT  INT_CONST
+Regras -> Regra Regras |  cadeia_vazia
+Regra -> WHEN  ID  Expr -> ID
+Expr ->  &  ID Oprel INT_CONST  |  cadeia_vazia
+Oprel -> > | >= | < | <= | != | ==
