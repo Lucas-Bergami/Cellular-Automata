@@ -2,14 +2,14 @@ use iced::widget::canvas::{self, Cache, Canvas, Geometry, Path, Stroke};
 use iced::widget::pane_grid::mouse_interaction;
 use iced::widget::text_input::cursor;
 use iced::widget::{
-    button, column, container, pick_list, row, scrollable, slider, text, text_input, Button,
-    Column, Container, PickList, Row, Scrollable, Slider, Text, TextInput,
+    Button, Column, Container, PickList, Row, Scrollable, Slider, Text, TextInput, button, column,
+    container, pick_list, row, scrollable, slider, text, text_input,
 };
-use iced::{executor, Application};
 use iced::{
-    theme, Alignment, Color, Command, Element, Length, Point, Rectangle, Renderer, Settings, Size,
-    Subscription, Theme, Vector,
+    Alignment, Color, Command, Element, Length, Point, Rectangle, Renderer, Settings, Size,
+    Subscription, Theme, Vector, theme,
 };
+use iced::{Application, executor};
 use std::time::{Duration, Instant};
 
 // --- Paste CAState, RelationalOperator, TransitionRule, CAGrid structs here ---
@@ -318,12 +318,24 @@ impl Application for CASimulator {
                     let r = self.new_state_color_r.parse::<u8>().unwrap_or(0);
                     let g = self.new_state_color_g.parse::<u8>().unwrap_or(0);
                     let b = self.new_state_color_b.parse::<u8>().unwrap_or(0);
-                    let new_id = self.states.len() as u8; // Simple ID assignment
+
+                    let mut new_id = 0u8;
+                    let mut used_ids: Vec<u8> = self.states.iter().map(|s| s.id).collect();
+                    used_ids.sort_unstable();
+                    for id in used_ids {
+                        if id == new_id {
+                            new_id += 1;
+                        } else if id > new_id {
+                            break;
+                        }
+                    }
+
                     self.states.push(CAState {
                         id: new_id,
                         name: self.new_state_name.clone(),
                         color: Color::from_rgb8(r, g, b),
                     });
+
                     self.new_state_name.clear();
                     // Optionally reset color inputs
                 }
