@@ -96,14 +96,18 @@ pub struct CAGrid {
 }
 
 impl CAGrid {
-    pub fn new(width: usize, height: usize, default_state_id: u8) -> Self {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
+    pub fn new(width: usize, height: usize, states: Vec<CAState>) -> Self {
+        use rand::prelude::IndexedRandom;
+        use rand::rng;
+
+        let mut rng = rng();
+
+        let available_state_ids: Vec<u8> = states.iter().map(|s| s.id).collect();
 
         let cells = (0..height)
             .map(|_| {
                 (0..width)
-                    .map(|_| if rng.gen_bool(0.5) { 1 } else { 0 }) // escolhe aleatório 0 ou 1
+                    .map(|_| *available_state_ids.choose(&mut rng).unwrap_or(&0))
                     .collect()
             })
             .collect();
@@ -261,7 +265,11 @@ impl Application for CASimulator {
                 color: Color::new(0.0, 1.0, 0.0, 1.0),
             },
         ];
-        let grid = CAGrid::new(DEFAULT_GRID_WIDTH, DEFAULT_GRID_HEIGHT, DEFAULT_STATE_ID);
+        let grid = CAGrid::new(
+            DEFAULT_GRID_WIDTH,
+            DEFAULT_GRID_HEIGHT,
+            initial_states.clone(),
+        );
 
         (
             CASimulator {
@@ -466,11 +474,11 @@ impl Application for CASimulator {
                     .grid_height_input
                     .parse()
                     .unwrap_or(DEFAULT_GRID_HEIGHT);
-                self.grid = CAGrid::new(width, height, DEFAULT_STATE_ID);
+                self.grid = CAGrid::new(width, height, self.states.clone());
                 self.grid_cache.clear();
             }
             Message::ResetGrid => {
-                self.grid = CAGrid::new(self.grid.width, self.grid.height, DEFAULT_STATE_ID);
+                self.grid = CAGrid::new(self.grid.width, self.grid.height, self.states.clone());
                 self.grid_cache.clear();
             }
             Message::ToggleSimulation => {
