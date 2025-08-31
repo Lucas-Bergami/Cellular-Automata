@@ -10,6 +10,7 @@ use iced::{
     Subscription, Theme, Vector, theme,
 };
 use iced::{Application, executor};
+use std::fmt;
 use std::time::{Duration, Instant};
 
 // --- Paste CAState, RelationalOperator, TransitionRule, CAGrid structs here ---
@@ -93,6 +94,24 @@ pub struct CAGrid {
     pub width: usize,
     pub height: usize,
     pub cells: Vec<Vec<u8>>, // Stores state IDs
+    pub neighborhood: Neighborhood,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Neighborhood {
+    VonNeumann,    // 4 vizinhos
+    Moore,         // 8 vizinhos
+    ExtendedMoore, // 16 vizinhos
+}
+
+impl fmt::Display for Neighborhood {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Neighborhood::VonNeumann => write!(f, "Von Neumann (4)"),
+            Neighborhood::Moore => write!(f, "Moore (8)"),
+            Neighborhood::ExtendedMoore => write!(f, "Extended Moore (16)"),
+        }
+    }
 }
 
 impl CAGrid {
@@ -116,23 +135,61 @@ impl CAGrid {
             width,
             height,
             cells,
+            neighborhood: Neighborhood::Moore,
         }
     }
 
     pub fn count_neighbors(&self, r: usize, c: usize, target_state_id: u8) -> u8 {
-        let mut count = 0;
-        for dr in -1..=1 {
-            for dc in -1..=1 {
-                if dr == 0 && dc == 0 {
-                    continue;
-                }
-                let nr = r as isize + dr;
-                let nc = c as isize + dc;
+        let directions: &[(isize, isize)] = match self.neighborhood {
+            Neighborhood::VonNeumann => &[(-1, 0), (1, 0), (0, -1), (0, 1)],
+            Neighborhood::Moore => &[
+                (-1, -1),
+                (-1, 0),
+                (-1, 1),
+                (0, -1),
+                (0, 1),
+                (1, -1),
+                (1, 0),
+                (1, 1),
+            ],
+            Neighborhood::ExtendedMoore => &[
+                // normal Moore
+                (-1, -1),
+                (-1, 0),
+                (-1, 1),
+                (0, -1),
+                (0, 1),
+                (1, -1),
+                (1, 0),
+                (1, 1),
+                // Second layer
+                (-2, -2),
+                (-2, -1),
+                (-2, 0),
+                (-2, 1),
+                (-2, 2),
+                (-1, -2),
+                (-1, 2),
+                (0, -2),
+                (0, 2),
+                (1, -2),
+                (1, 2),
+                (2, -2),
+                (2, -1),
+                (2, 0),
+                (2, 1),
+                (2, 2),
+            ],
+        };
 
-                if nr >= 0 && nr < self.height as isize && nc >= 0 && nc < self.width as isize {
-                    if self.cells[nr as usize][nc as usize] == target_state_id {
-                        count += 1;
-                    }
+        let mut count = 0;
+        for (dr, dc) in directions {
+            let nr = r as isize + dr;
+            let nc = c as isize + dc;
+
+            if nr >= 0 && nr < self.height as isize && nc >= 0 && nc < self.width as isize {
+                if self.cells[nr as usize][nc as usize] == target_state_id {
+                    count += 1;
                 }
             }
         }
@@ -234,6 +291,7 @@ enum Message {
     RemoveRule(usize), // by index
 
     // Grid/Simulation
+    NeighborhoodChanged(Neighborhood),
     GridWidthChanged(String),
     GridHeightChanged(String),
     ApplyGridSize,
@@ -382,17 +440,14 @@ impl Application for CASimulator {
             Message::RuleThresholdChanged(val) => self.rule_form_threshold = val,
             Message::RuleNextStateSelected(state) => self.rule_form_next_state = Some(state),
             Message::AddRule => {
-                // Limpa erro anterior
                 self.rule_form_error = None;
 
-                // Valida cada pedaço com feedback específico
                 let mut errors = Vec::new();
 
                 let cur = if let Some(s) = self.rule_form_current_state.as_ref() {
                     s
                 } else {
                     errors.push("Current State não selecionado");
-                    // placeholder, não importa porque vamos abortar se tiver erro
                     &CAState {
                         id: 0,
                         name: "".into(),
@@ -415,7 +470,7 @@ impl Application for CASimulator {
                     o
                 } else {
                     errors.push("Operator não selecionado");
-                    RelationalOperator::Equals // valor fictício
+                    RelationalOperator::Equals
                 };
 
                 let thr = match self.rule_form_threshold.parse::<u8>() {
@@ -466,6 +521,9 @@ impl Application for CASimulator {
             }
 
             // --- Grid/Simulation Messages ---
+            Message::NeighborhoodChanged(nb) => {
+                self.grid.neighborhood = nb;
+            }
             Message::GridWidthChanged(w) => self.grid_width_input = w,
             Message::GridHeightChanged(h) => self.grid_height_input = h,
             Message::ApplyGridSize => {
@@ -808,6 +866,16 @@ impl CASimulator {
                 Message::PaintStateSelected
             )
             .placeholder("Select Paint State"),
+            PickList::new(
+                vec![
+                    Neighborhood::VonNeumann,
+                    Neighborhood::Moore,
+                    Neighborhood::ExtendedMoore
+                ],
+                Some(self.grid.neighborhood),
+                Message::NeighborhoodChanged
+            )
+            .placeholder("Select Neighborhood"),
         ]
         .spacing(15)
         .width(Length::Fill); // faz o painel de controles expandir horizontalmente
