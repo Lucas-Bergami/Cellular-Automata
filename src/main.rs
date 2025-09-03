@@ -2,14 +2,14 @@ use iced::widget::canvas::{self, Cache, Canvas, Geometry, Path, Stroke};
 use iced::widget::pane_grid::mouse_interaction;
 use iced::widget::text_input::cursor;
 use iced::widget::{
-    Button, Column, Container, PickList, Row, Scrollable, Slider, Text, TextInput, button, column,
-    container, pick_list, row, scrollable, slider, text, text_input,
+    button, column, container, pick_list, row, scrollable, slider, text, text_input, Button,
+    Column, Container, PickList, Row, Scrollable, Slider, Text, TextInput,
 };
+use iced::{executor, Application};
 use iced::{
-    Alignment, Color, Command, Element, Length, Point, Rectangle, Renderer, Settings, Size,
-    Subscription, Theme, Vector, theme,
+    theme, Alignment, Color, Command, Element, Length, Point, Rectangle, Renderer, Settings, Size,
+    Subscription, Theme, Vector,
 };
-use iced::{Application, executor};
 use std::fmt;
 use std::time::{Duration, Instant};
 
@@ -74,18 +74,48 @@ impl std::fmt::Display for RelationalOperator {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum ConditionCombiner {
+    And,
+    Or,
+    Xor,
+}
+
 // Represents a single transition rule
 #[derive(Debug, Clone)]
 pub struct TransitionRule {
     pub current_state_id: u8,
-    pub neighbor_state_id_to_count: u8,
-    pub operator: RelationalOperator,
-    pub neighbor_count_threshold: u8,
+
+    pub neighbor_state_id_to_count: Vec<u8>,
+    pub operator: Vec<RelationalOperator>,
+    pub neighbor_count_threshold: Vec<u8>,
+    pub combiner: Vec<ConditionCombiner>,
+
     pub next_state_id: u8,
     // For display
     pub current_state_name: String,
     pub neighbor_state_name: String,
     pub next_state_name: String,
+}
+
+impl TransitionRule {
+    pub fn conditions_as_string(&self) -> String {
+        let mut parts = Vec::new();
+        for i in 0..self.neighbor_state_id_to_count.len() {
+            let cond_str = format!(
+                "count of '{}' {} {}",
+                self.neighbor_state_name, // ⚠️ aqui está só um String
+                self.operator[i],
+                self.neighbor_count_threshold[i],
+            );
+            parts.push(cond_str);
+
+            if i < self.combiner.len() {
+                parts.push(format!("{:?}", self.combiner[i])); // AND / OR / XOR
+            }
+        }
+        parts.join(" ")
+    }
 }
 
 // The 2D grid for simulation
@@ -416,7 +446,7 @@ impl Application for CASimulator {
                     // A robust solution would re-index or validate.
                     self.rules.retain(|rule| {
                         rule.current_state_id != removed_state_id
-                            && rule.neighbor_state_id_to_count != removed_state_id
+                            && !rule.neighbor_state_id_to_count.contains(&removed_state_id)
                             && rule.next_state_id != removed_state_id
                     });
                     // Reset any cells on the grid that used this state to default
@@ -497,15 +527,18 @@ impl Application for CASimulator {
                 } else {
                     self.rules.push(TransitionRule {
                         current_state_id: cur.id,
-                        neighbor_state_id_to_count: ngh.id,
-                        operator: op,
-                        neighbor_count_threshold: thr,
+
+                        neighbor_state_id_to_count: vec![ngh.id],
+                        operator: vec![op],
+                        neighbor_count_threshold: vec![thr],
+                        combiner: vec![ConditionCombiner::And],
+
                         next_state_id: nxt.id,
+
                         current_state_name: cur.name.clone(),
                         neighbor_state_name: ngh.name.clone(),
                         next_state_name: nxt.name.clone(),
                     });
-                    // opcional: limpar formulário
                     self.rule_form_current_state = None;
                     self.rule_form_neighbor_state = None;
                     self.rule_form_operator = None;
@@ -765,11 +798,9 @@ impl CASimulator {
                         col.push(
                             row![
                                 text(format!(
-                                    "IF current is '{}' AND count of '{}' {} {} THEN next is '{}'",
+                                    "IF current is '{}' {} THEN next is '{}'", //TODO:FIX
                                     rule.current_state_name,
-                                    rule.neighbor_state_name,
-                                    rule.operator,
-                                    rule.neighbor_count_threshold,
+                                    rule.conditions_as_string(),
                                     rule.next_state_name
                                 ))
                                 .width(Length::Fill),
@@ -923,22 +954,69 @@ impl CASimulator {
                 let current_cell_state_id = current_grid.cells[r][c];
                 let mut new_state_id = current_cell_state_id; // Default to no change
 
-                for rule in &self.rules {
+                println!(
+                    "Celula ({}, {}) estado atual: {}",
+                    r, c, current_cell_state_id
+                );
+
+                for (rule_idx, rule) in self.rules.iter().enumerate() {
                     if rule.current_state_id == current_cell_state_id {
-                        let neighbor_count =
-                            current_grid.count_neighbors(r, c, rule.neighbor_state_id_to_count);
-                        if rule
-                            .operator
-                            .evaluate(neighbor_count, rule.neighbor_count_threshold)
-                        {
+                        println!(
+                            "  Testando regra {} -> next {}",
+                            rule_idx, rule.next_state_id
+                        );
+
+                        let mut results = Vec::new();
+
+                        for i in 0..rule.neighbor_state_id_to_count.len() {
+                            let neighbor_state = rule.neighbor_state_id_to_count[i];
+                            let op = rule.operator[i];
+                            let thr = rule.neighbor_count_threshold[i];
+
+                            let neighbor_count = current_grid.count_neighbors(r, c, neighbor_state);
+                            let res = op.evaluate(neighbor_count, thr);
+
+                            println!(
+                                "    Condição {}: count of {} = {} {} {} ? {}",
+                                i, neighbor_state, neighbor_count, op, thr, res
+                            );
+
+                            results.push(res);
+                        }
+
+                        // combina os resultados
+                        let mut final_result = results[0];
+                        for i in 1..results.len() {
+                            let combiner = &rule.combiner[i - 1];
+                            let before = final_result;
+                            final_result = match combiner {
+                                ConditionCombiner::And => final_result && results[i],
+                                ConditionCombiner::Or => final_result || results[i],
+                                ConditionCombiner::Xor => final_result ^ results[i],
+                            };
+                            println!(
+                                "    Combinação {}: {:?} entre {} e {} = {}",
+                                i, combiner, before, results[i], final_result
+                            );
+                        }
+
+                        println!("  Resultado final da regra {}: {}", rule_idx, final_result);
+
+                        if final_result {
+                            println!(
+                                "  >>> Regra {} aplicada: célula muda de {} para {}",
+                                rule_idx, current_cell_state_id, rule.next_state_id
+                            );
                             new_state_id = rule.next_state_id;
-                            break; // First matching rule applies
+                            break;
                         }
                     }
                 }
+
                 next_grid_cells[r][c] = new_state_id;
             }
         }
+
         self.grid.cells = next_grid_cells;
         self.grid_cache.clear(); // Crucial: Invalidate cache to force redraw
     }
