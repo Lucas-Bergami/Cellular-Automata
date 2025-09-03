@@ -13,9 +13,6 @@ use iced::{
 use std::fmt;
 use std::time::{Duration, Instant};
 
-// --- Paste CAState, RelationalOperator, TransitionRule, CAGrid structs here ---
-// (from the section above)
-
 // Represents a single state in the CA
 #[derive(Debug, Clone, PartialEq)]
 pub struct CAState {
@@ -74,11 +71,31 @@ impl std::fmt::Display for RelationalOperator {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ConditionCombiner {
     And,
     Or,
     Xor,
+}
+
+impl fmt::Display for ConditionCombiner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            ConditionCombiner::And => "AND",
+            ConditionCombiner::Or => "OR",
+            ConditionCombiner::Xor => "XOR",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl ConditionCombiner {
+    // Todos os valores possíveis
+    pub const ALL: [ConditionCombiner; 3] = [
+        ConditionCombiner::And,
+        ConditionCombiner::Or,
+        ConditionCombiner::Xor,
+    ];
 }
 
 // Represents a single transition rule
@@ -104,9 +121,7 @@ impl TransitionRule {
         for i in 0..self.neighbor_state_id_to_count.len() {
             let cond_str = format!(
                 "count of '{}' {} {}",
-                self.neighbor_state_name, // ⚠️ aqui está só um String
-                self.operator[i],
-                self.neighbor_count_threshold[i],
+                self.neighbor_state_name, self.operator[i], self.neighbor_count_threshold[i],
             );
             parts.push(cond_str);
 
@@ -129,9 +144,9 @@ pub struct CAGrid {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Neighborhood {
-    VonNeumann,    // 4 vizinhos
-    Moore,         // 8 vizinhos
-    ExtendedMoore, // 16 vizinhos
+    VonNeumann,
+    Moore,
+    ExtendedMoore,
 }
 
 impl fmt::Display for Neighborhood {
@@ -259,6 +274,13 @@ pub fn main() -> iced::Result {
     })
 }
 
+struct ConditionForm {
+    neighbor_state: Option<CAState>,
+    operator: Option<RelationalOperator>,
+    threshold: String, // texto do input
+    combiner: Option<ConditionCombiner>,
+}
+
 struct CASimulator {
     active_tab: TabId,
     states: Vec<CAState>,
@@ -283,6 +305,8 @@ struct CASimulator {
     rule_form_threshold: String,
     rule_form_next_state: Option<CAState>,
     rule_form_error: Option<String>,
+    rule_form_conditions: Vec<ConditionForm>,
+
     // Grid dimensions input
     grid_width_input: String,
     grid_height_input: String,
@@ -295,7 +319,6 @@ struct CASimulator {
 enum TabId {
     Definition,
     Simulation,
-    // ModelImage, // You mentioned "image of the created model"
 }
 
 #[derive(Debug, Clone)]
@@ -312,10 +335,13 @@ enum Message {
     RemoveState(usize), // by index
 
     // Rule definition
+    RuleCombinerSelected(usize, ConditionCombiner),
+    AddCondition,
+    RemoveCondition(usize),
+    RuleNeighborStateSelected(usize, CAState),
+    RuleOperatorSelected(usize, RelationalOperator),
+    RuleThresholdChanged(usize, String),
     RuleCurrentStateSelected(CAState),
-    RuleNeighborStateSelected(CAState),
-    RuleOperatorSelected(RelationalOperator),
-    RuleThresholdChanged(String),
     RuleNextStateSelected(CAState),
     AddRule,
     RemoveRule(usize), // by index
@@ -381,6 +407,7 @@ impl Application for CASimulator {
                 rule_form_threshold: "0".to_string(),
                 rule_form_next_state: None,
                 rule_form_error: None,
+                rule_form_conditions: vec![],
 
                 grid_width_input: DEFAULT_GRID_WIDTH.to_string(),
                 grid_height_input: DEFAULT_GRID_HEIGHT.to_string(),
@@ -404,6 +431,7 @@ impl Application for CASimulator {
                     self.step_simulation_logic();
                 }
             }
+
             // --- State Definition Messages ---
             Message::StateNameChanged(name) => self.new_state_name = name,
             Message::StateColorRChanged(r) => self.new_state_color_r = r,
@@ -433,23 +461,17 @@ impl Application for CASimulator {
                     });
 
                     self.new_state_name.clear();
-                    // Optionally reset color inputs
                 }
             }
             Message::RemoveState(index) => {
                 if index < self.states.len() {
                     let removed_state_id = self.states[index].id;
                     self.states.remove(index);
-                    // Important: Need to update rules that might reference this state,
-                    // or prevent removal if state is in use by rules/grid.
-                    // For simplicity, we are not doing that here, which can lead to crashes.
-                    // A robust solution would re-index or validate.
                     self.rules.retain(|rule| {
                         rule.current_state_id != removed_state_id
                             && !rule.neighbor_state_id_to_count.contains(&removed_state_id)
                             && rule.next_state_id != removed_state_id
                     });
-                    // Reset any cells on the grid that used this state to default
                     for r in 0..self.grid.height {
                         for c in 0..self.grid.width {
                             if self.grid.cells[r][c] == removed_state_id {
@@ -457,27 +479,58 @@ impl Application for CASimulator {
                             }
                         }
                     }
-                    self.grid_cache.clear(); // Grid needs redraw
+                    self.grid_cache.clear();
                 }
             }
 
             // --- Rule Definition Messages ---
             Message::RuleCurrentStateSelected(state) => self.rule_form_current_state = Some(state),
-            Message::RuleNeighborStateSelected(state) => {
-                self.rule_form_neighbor_state = Some(state)
-            }
-            Message::RuleOperatorSelected(op) => self.rule_form_operator = Some(op),
-            Message::RuleThresholdChanged(val) => self.rule_form_threshold = val,
             Message::RuleNextStateSelected(state) => self.rule_form_next_state = Some(state),
+
+            Message::RuleCombinerSelected(idx, comb) => {
+                if idx < self.rule_form_conditions.len() {
+                    self.rule_form_conditions[idx].combiner = Some(comb);
+                }
+            }
+
+            Message::AddCondition => {
+                self.rule_form_conditions.push(ConditionForm {
+                    neighbor_state: None,
+                    operator: None,
+                    threshold: String::new(),
+                    combiner: None,
+                });
+            }
+            Message::RemoveCondition(idx) => {
+                if idx < self.rule_form_conditions.len() {
+                    self.rule_form_conditions.remove(idx);
+                }
+            }
+            Message::RuleNeighborStateSelected(idx, state) => {
+                if idx < self.rule_form_conditions.len() {
+                    self.rule_form_conditions[idx].neighbor_state = Some(state);
+                }
+            }
+            Message::RuleOperatorSelected(idx, op) => {
+                if idx < self.rule_form_conditions.len() {
+                    self.rule_form_conditions[idx].operator = Some(op);
+                }
+            }
+            Message::RuleThresholdChanged(idx, val) => {
+                if idx < self.rule_form_conditions.len() {
+                    self.rule_form_conditions[idx].threshold = val;
+                }
+            }
+
             Message::AddRule => {
                 self.rule_form_error = None;
+                let mut errors: Vec<String> = Vec::new();
 
-                let mut errors = Vec::new();
-
+                // Current state
                 let cur = if let Some(s) = self.rule_form_current_state.as_ref() {
                     s
                 } else {
-                    errors.push("Current State não selecionado");
+                    errors.push("Current State não selecionado".to_string());
                     &CAState {
                         id: 0,
                         name: "".into(),
@@ -485,78 +538,96 @@ impl Application for CASimulator {
                     }
                 };
 
-                let ngh = if let Some(s) = self.rule_form_neighbor_state.as_ref() {
-                    s
-                } else {
-                    errors.push("Neighbor State não selecionado");
-                    &CAState {
-                        id: 0,
-                        name: "".into(),
-                        color: Color::WHITE,
-                    }
-                };
-
-                let op = if let Some(o) = self.rule_form_operator {
-                    o
-                } else {
-                    errors.push("Operator não selecionado");
-                    RelationalOperator::Equals
-                };
-
-                let thr = match self.rule_form_threshold.parse::<u8>() {
-                    Ok(v) => v,
-                    Err(_) => {
-                        errors.push("Threshold inválido (deve ser número entre 0 e 255)");
-                        0
-                    }
-                };
-
+                // Next state
                 let nxt = if let Some(s) = self.rule_form_next_state.as_ref() {
                     s
                 } else {
-                    errors.push("Next State não selecionado");
+                    errors.push("Next State não selecionado".to_string());
                     &CAState {
                         id: 0,
                         name: "".into(),
                         color: Color::WHITE,
                     }
                 };
+
+                if self.rule_form_conditions.is_empty() {
+                    errors.push("Nenhuma condição adicionada à regra".to_string());
+                }
+
+                let mut neighbor_ids: Vec<u8> = Vec::new();
+                let mut operators: Vec<RelationalOperator> = Vec::new();
+                let mut thresholds: Vec<u8> = Vec::new();
+                let mut combiners: Vec<ConditionCombiner> = Vec::new();
+
+                for (idx, cond) in self.rule_form_conditions.iter().enumerate() {
+                    // Neighbor state
+                    if let Some(state) = &cond.neighbor_state {
+                        neighbor_ids.push(state.id);
+                    } else {
+                        errors.push(format!(
+                            "Neighbor State não selecionado na condição {}",
+                            idx + 1
+                        ));
+                        neighbor_ids.push(0);
+                    }
+
+                    // Operator
+                    if let Some(op) = cond.operator {
+                        operators.push(op);
+                    } else {
+                        errors.push(format!("Operador não selecionado na condição {}", idx + 1));
+                        operators.push(RelationalOperator::Equals);
+                    }
+
+                    // Threshold
+                    match cond.threshold.parse::<u8>() {
+                        Ok(v) => thresholds.push(v),
+                        Err(_) => {
+                            errors.push(format!("Threshold inválido na condição {}", idx + 1));
+                            thresholds.push(0);
+                        }
+                    }
+
+                    if idx < self.rule_form_conditions.len() - 1 {
+                        if let Some(comb) = cond.combiner.clone() {
+                            combiners.push(comb);
+                        } else {
+                            combiners.push(ConditionCombiner::And);
+                        }
+                    }
+                }
 
                 if !errors.is_empty() {
                     self.rule_form_error = Some(errors.join("; "));
                 } else {
                     self.rules.push(TransitionRule {
                         current_state_id: cur.id,
-
-                        neighbor_state_id_to_count: vec![ngh.id],
-                        operator: vec![op],
-                        neighbor_count_threshold: vec![thr],
-                        combiner: vec![ConditionCombiner::And],
-
+                        neighbor_state_id_to_count: neighbor_ids,
+                        operator: operators,
+                        neighbor_count_threshold: thresholds,
+                        combiner: combiners,
                         next_state_id: nxt.id,
-
                         current_state_name: cur.name.clone(),
-                        neighbor_state_name: ngh.name.clone(),
+                        neighbor_state_name: String::new(),
                         next_state_name: nxt.name.clone(),
                     });
+
+                    // Reset form
                     self.rule_form_current_state = None;
-                    self.rule_form_neighbor_state = None;
-                    self.rule_form_operator = None;
-                    self.rule_form_threshold.clear();
                     self.rule_form_next_state = None;
+                    self.rule_form_conditions.clear();
                     self.rule_form_error = None;
                 }
             }
-            Message::RemoveRule(index) => {
-                if index < self.rules.len() {
-                    self.rules.remove(index);
+
+            Message::RemoveRule(idx) => {
+                if idx < self.rules.len() {
+                    self.rules.remove(idx);
                 }
             }
 
             // --- Grid/Simulation Messages ---
-            Message::NeighborhoodChanged(nb) => {
-                self.grid.neighborhood = nb;
-            }
+            Message::NeighborhoodChanged(nb) => self.grid.neighborhood = nb,
             Message::GridWidthChanged(w) => self.grid_width_input = w,
             Message::GridHeightChanged(h) => self.grid_height_input = h,
             Message::ApplyGridSize => {
@@ -574,52 +645,37 @@ impl Application for CASimulator {
             }
             Message::ToggleSimulation => {
                 self.is_simulating = !self.is_simulating;
-                if self.is_simulating {
-                    self.simulation_timer = Some(Instant::now());
+                self.simulation_timer = if self.is_simulating {
+                    Some(Instant::now())
                 } else {
-                    self.simulation_timer = None;
-                }
+                    None
+                };
             }
-            Message::NextStep => {
-                self.step_simulation_logic();
-            }
+            Message::NextStep => self.step_simulation_logic(),
             Message::SimulationSpeedChanged(value) => {
-                // Slider 0-100. Map to e.g. 1000ms to 10ms
-                // (100 - value) makes slider left slow, right fast
                 let inv_value = 100.0 - value;
-                self.simulation_speed_ms = (10.0 + inv_value * 9.9) as u64; // Maps 0-100 to 1000ms-10ms
+                self.simulation_speed_ms = (10.0 + inv_value * 9.9) as u64;
             }
             Message::CanvasEvent(event) => {
                 if let canvas::Event::Mouse(mouse_event) = event {
                     if mouse_event == iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left) {
-                        /*if let Some(cursor_pos) = cursor.position {
-                             // Determine cell size (approximate for now)
-                            let cell_width = if self.grid.width > 0 { 600.0 / self.grid.width as f32 } else { 10.0 };
-                            let cell_height = if self.grid.height > 0 { 600.0 / self.grid.height as f32 } else { 10.0 };
-
-                            let c = (cursor_pos.x / cell_width).floor() as usize;
-                            let r = (cursor_pos.y / cell_height).floor() as usize;
-
-                            if r < self.grid.height && c < self.grid.width {
-                                self.grid.set_state(r, c, self.selected_paint_state_id);
-                                self.grid_cache.clear(); // Redraw
-                            }
-                        }*/
+                        // lógica de clique opcional
                     }
                 }
             }
-            Message::PaintStateSelected(selected_state) => {
+            Message::PaintStateSelected(state) => {
+                self.selected_paint_state_id = state.id;
                 println!(
                     "Cor selecionada: R={} G={} B={}",
-                    selected_state.color.r, selected_state.color.g, selected_state.color.b,
+                    state.color.r, state.color.g, state.color.b
                 );
-                self.selected_paint_state_id = selected_state.id;
             }
             Message::PaintCell(row, col, state_id) => {
                 self.grid.cells[row][col] = state_id;
                 self.grid_cache.clear();
             }
         }
+
         Command::none()
     }
 
@@ -737,10 +793,11 @@ impl CASimulator {
         .width(Length::Fill);
 
         // --- Rule Creation Panel ---
-        let available_states_for_picklist = self.states.clone(); // Clone for pick_list
+        let available_states_for_picklist = self.states.clone();
 
         let mut rule_creation_panel = column![
             text("Create New Transition Rule").size(20),
+            // Current State
             text("IF Current State is:"),
             PickList::new(
                 available_states_for_picklist.clone(),
@@ -748,42 +805,80 @@ impl CASimulator {
                 Message::RuleCurrentStateSelected,
             )
             .placeholder("Select Current State"),
-            text("AND Count of Neighbors with State:"),
-            PickList::new(
-                available_states_for_picklist.clone(),
-                self.rule_form_neighbor_state.clone(),
-                Message::RuleNeighborStateSelected,
-            )
-            .placeholder("Select Neighbor State to Count"),
-            text("Is:"),
-            row![
+            // Condições
+            text("AND the following conditions are met:"),
+        ];
+
+        // Loop sobre as condições
+        for idx in 0..self.rule_form_conditions.len() {
+            let cond = &self.rule_form_conditions[idx];
+
+            let mut condition_row = row![
+                // Neighbor State
                 PickList::new(
-                    RelationalOperator::ALL.to_vec(),
-                    self.rule_form_operator,
-                    Message::RuleOperatorSelected
+                    available_states_for_picklist.clone(),
+                    cond.neighbor_state.clone(),
+                    {
+                        let idx = idx;
+                        move |s| Message::RuleNeighborStateSelected(idx, s)
+                    }
                 )
+                .placeholder("Neighbor State"),
+                // Operator
+                PickList::new(RelationalOperator::ALL.to_vec(), cond.operator, {
+                    let idx = idx;
+                    move |op| Message::RuleOperatorSelected(idx, op)
+                })
                 .placeholder("Operator"),
-                text_input("Count (e.g., 3)", &self.rule_form_threshold)
-                    .on_input(Message::RuleThresholdChanged)
+                // Threshold
+                text_input("Count (e.g., 3)", &cond.threshold)
+                    .on_input({
+                        let idx = idx;
+                        move |val| Message::RuleThresholdChanged(idx, val)
+                    })
                     .padding(5)
                     .width(Length::Fixed(80.0)),
+                // Remove condition button
+                button("-").on_press(Message::RemoveCondition(idx))
             ]
-            .spacing(5),
-            text("THEN Next State is:"),
+            .spacing(5);
+
+            if idx < self.rule_form_conditions.len() - 1 {
+                condition_row = condition_row.push(
+                    PickList::new(ConditionCombiner::ALL.to_vec(), cond.combiner.clone(), {
+                        let idx = idx;
+                        move |comb| Message::RuleCombinerSelected(idx, comb)
+                    })
+                    .placeholder("Combiner")
+                    .width(Length::Fixed(80.0)),
+                );
+            }
+
+            rule_creation_panel = rule_creation_panel.push(condition_row);
+        }
+
+        rule_creation_panel = rule_creation_panel.push(
+            button("+ Add Condition")
+                .on_press(Message::AddCondition)
+                .padding(5),
+        );
+
+        // Next State
+        rule_creation_panel = rule_creation_panel.push(text("THEN Next State is:")).push(
             PickList::new(
-                available_states_for_picklist, // consumido aqui
+                available_states_for_picklist.clone(),
                 self.rule_form_next_state.clone(),
                 Message::RuleNextStateSelected,
             )
             .placeholder("Select Next State"),
-            button("Add Rule").on_press(Message::AddRule).padding(5),
-        ]
-        .spacing(10)
-        .width(Length::Fill);
+        );
 
-        // injeta feedback de erro se existir
+        rule_creation_panel =
+            rule_creation_panel.push(button("Add Rule").on_press(Message::AddRule).padding(5));
+
         if let Some(err) = &self.rule_form_error {
-            rule_creation_panel = rule_creation_panel.push(text(err).size(16));
+            rule_creation_panel =
+                rule_creation_panel.push(text(err).size(16).style(Color::from_rgb8(255, 0, 0)));
         }
 
         let rules_list: Element<Message> = if self.rules.is_empty() {
@@ -837,11 +932,11 @@ impl CASimulator {
                     rules_panel,
                 ]
                 .spacing(20)
-                .padding([0, 15, 0, 0]) // espaçamento à direita para “abrir espaço” da scrollbar
+                .padding([0, 15, 0, 0])
                 .width(Length::Fill)
                 .align_items(Alignment::Start),
             )
-            .padding([0, 0, 15, 0]) // espaçamento à direita para “abrir espaço” da scrollbar
+            .padding([0, 0, 15, 0])
             .width(Length::Fill),
         )
         .width(Length::Fill)
@@ -1087,7 +1182,6 @@ impl canvas::Program<Message> for CASimulator {
         bounds: Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> (canvas::event::Status, Option<Message>) {
-        // Detecta se foi um evento de clique do mouse
         if let canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) =
             event
         {
@@ -1105,11 +1199,7 @@ impl canvas::Program<Message> for CASimulator {
                     if row < self.grid.height && col < self.grid.width {
                         return (
                             canvas::event::Status::Captured,
-                            Some(Message::PaintCell(
-                                row,
-                                col,
-                                self.selected_paint_state_id, // estado vindo do PickList
-                            )),
+                            Some(Message::PaintCell(row, col, self.selected_paint_state_id)),
                         );
                     }
                 }
