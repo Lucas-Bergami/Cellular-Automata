@@ -2,14 +2,14 @@ use iced::widget::canvas::{self, Cache, Canvas, Geometry, Path, Stroke};
 use iced::widget::pane_grid::mouse_interaction;
 use iced::widget::text_input::cursor;
 use iced::widget::{
-    button, column, container, pick_list, row, scrollable, slider, text, text_input, Button,
-    Column, Container, PickList, Row, Scrollable, Slider, Text, TextInput,
+    Button, Column, Container, PickList, Row, Scrollable, Slider, Text, TextInput, button, column,
+    container, pick_list, row, scrollable, slider, text, text_input,
 };
-use iced::{executor, Application};
 use iced::{
-    theme, Alignment, Color, Command, Element, Length, Point, Rectangle, Renderer, Settings, Size,
-    Subscription, Theme, Vector,
+    Alignment, Color, Command, Element, Length, Point, Rectangle, Renderer, Settings, Size,
+    Subscription, Theme, Vector, theme,
 };
+use iced::{Application, executor};
 use std::fmt;
 use std::time::{Duration, Instant};
 
@@ -90,12 +90,42 @@ impl fmt::Display for ConditionCombiner {
 }
 
 impl ConditionCombiner {
-    // Todos os valores possíveis
     pub const ALL: [ConditionCombiner; 3] = [
         ConditionCombiner::And,
         ConditionCombiner::Or,
         ConditionCombiner::Xor,
     ];
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExampleModel {
+    GameOfLife,
+    Wireworld,
+    BrianBrain,
+    TuringPatterns,
+    ForestFire,
+}
+
+impl ExampleModel {
+    pub const ALL: [ExampleModel; 5] = [
+        ExampleModel::GameOfLife,
+        ExampleModel::Wireworld,
+        ExampleModel::BrianBrain,
+        ExampleModel::TuringPatterns,
+        ExampleModel::ForestFire,
+    ];
+}
+
+impl std::fmt::Display for ExampleModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExampleModel::GameOfLife => write!(f, "Game of Life"),
+            ExampleModel::Wireworld => write!(f, "Wireworld"),
+            ExampleModel::BrianBrain => write!(f, "Brian’s Brain"),
+            ExampleModel::TuringPatterns => write!(f, "Turing Patterns"),
+            ExampleModel::ForestFire => write!(f, "Forest Fire"),
+        }
+    }
 }
 
 // Represents a single transition rule
@@ -255,8 +285,6 @@ impl CAGrid {
     }
 }
 
-// --- End of pasted structs ---
-
 const DEFAULT_GRID_WIDTH: usize = 50;
 const DEFAULT_GRID_HEIGHT: usize = 40;
 const DEFAULT_STATE_ID: u8 = 1;
@@ -335,6 +363,7 @@ enum Message {
     RemoveState(usize), // by index
 
     // Rule definition
+    ExampleModelSelected(ExampleModel),
     RuleCombinerSelected(usize, ConditionCombiner),
     AddCondition,
     RemoveCondition(usize),
@@ -384,12 +413,73 @@ impl Application for CASimulator {
             DEFAULT_GRID_HEIGHT,
             initial_states.clone(),
         );
-
+        let initial_rules = vec![
+            // Alive -> Alive (if vizinhos == 2)
+            TransitionRule {
+                current_state_id: 1,
+                neighbor_state_id_to_count: vec![1],
+                operator: vec![RelationalOperator::Equals],
+                neighbor_count_threshold: vec![2],
+                combiner: vec![],
+                next_state_id: 1,
+                current_state_name: "Alive".into(),
+                neighbor_state_name: "Alive".into(),
+                next_state_name: "Alive".into(),
+            },
+            // Alive -> Alive (if vizinhos == 3)
+            TransitionRule {
+                current_state_id: 1,
+                neighbor_state_id_to_count: vec![1],
+                operator: vec![RelationalOperator::Equals],
+                neighbor_count_threshold: vec![3],
+                combiner: vec![],
+                next_state_id: 1,
+                current_state_name: "Alive".into(),
+                neighbor_state_name: "Alive".into(),
+                next_state_name: "Alive".into(),
+            },
+            // Dead -> Alive (if vizinhos == 3)
+            TransitionRule {
+                current_state_id: 0,
+                neighbor_state_id_to_count: vec![1],
+                operator: vec![RelationalOperator::Equals],
+                neighbor_count_threshold: vec![3],
+                combiner: vec![],
+                next_state_id: 1,
+                current_state_name: "Dead".into(),
+                neighbor_state_name: "Alive".into(),
+                next_state_name: "Alive".into(),
+            },
+            // Alive -> Dead (se vizinhos < 2)
+            TransitionRule {
+                current_state_id: 1,
+                neighbor_state_id_to_count: vec![1],
+                operator: vec![RelationalOperator::LessThan],
+                neighbor_count_threshold: vec![2],
+                combiner: vec![],
+                next_state_id: 0,
+                current_state_name: "Alive".into(),
+                neighbor_state_name: "Alive".into(),
+                next_state_name: "Dead".into(),
+            },
+            // Alive -> Dead (if vizinhos > 3)
+            TransitionRule {
+                current_state_id: 1,
+                neighbor_state_id_to_count: vec![1],
+                operator: vec![RelationalOperator::GreaterThan],
+                neighbor_count_threshold: vec![3],
+                combiner: vec![],
+                next_state_id: 0,
+                current_state_name: "Alive".into(),
+                neighbor_state_name: "Alive".into(),
+                next_state_name: "Dead".into(),
+            },
+        ];
         (
             CASimulator {
                 active_tab: TabId::Definition,
                 states: initial_states,
-                rules: Vec::new(),
+                rules: initial_rules,
                 grid,
                 grid_cache: Cache::new(),
                 simulation_timer: None,
@@ -487,6 +577,318 @@ impl Application for CASimulator {
             Message::RuleCurrentStateSelected(state) => self.rule_form_current_state = Some(state),
             Message::RuleNextStateSelected(state) => self.rule_form_next_state = Some(state),
 
+            Message::ExampleModelSelected(model) => {
+                self.states.clear();
+                self.rules.clear();
+
+                match model {
+                    ExampleModel::GameOfLife => {
+                        self.states = vec![
+                            CAState {
+                                id: 0,
+                                name: "Dead".into(),
+                                color: Color::BLACK,
+                            },
+                            CAState {
+                                id: 1,
+                                name: "Alive".into(),
+                                color: Color::from_rgb8(0, 255, 0),
+                            },
+                        ];
+
+                        self.rules = vec![
+                            TransitionRule {
+                                current_state_id: 1,
+                                neighbor_state_id_to_count: vec![1],
+                                operator: vec![RelationalOperator::Equals],
+                                neighbor_count_threshold: vec![2],
+                                combiner: vec![],
+                                next_state_id: 1,
+                                current_state_name: "Alive".into(),
+                                neighbor_state_name: "Alive".into(),
+                                next_state_name: "Alive".into(),
+                            },
+                            TransitionRule {
+                                current_state_id: 1,
+                                neighbor_state_id_to_count: vec![1],
+                                operator: vec![RelationalOperator::Equals],
+                                neighbor_count_threshold: vec![3],
+                                combiner: vec![],
+                                next_state_id: 1,
+                                current_state_name: "Alive".into(),
+                                neighbor_state_name: "Alive".into(),
+                                next_state_name: "Alive".into(),
+                            },
+                            TransitionRule {
+                                current_state_id: 0,
+                                neighbor_state_id_to_count: vec![1],
+                                operator: vec![RelationalOperator::Equals],
+                                neighbor_count_threshold: vec![3],
+                                combiner: vec![],
+                                next_state_id: 1,
+                                current_state_name: "Dead".into(),
+                                neighbor_state_name: "Alive".into(),
+                                next_state_name: "Alive".into(),
+                            },
+                            TransitionRule {
+                                current_state_id: 1,
+                                neighbor_state_id_to_count: vec![1],
+                                operator: vec![RelationalOperator::LessThan],
+                                neighbor_count_threshold: vec![2],
+                                combiner: vec![],
+                                next_state_id: 0,
+                                current_state_name: "Alive".into(),
+                                neighbor_state_name: "Alive".into(),
+                                next_state_name: "Dead".into(),
+                            },
+                            TransitionRule {
+                                current_state_id: 1,
+                                neighbor_state_id_to_count: vec![1],
+                                operator: vec![RelationalOperator::GreaterThan],
+                                neighbor_count_threshold: vec![3],
+                                combiner: vec![],
+                                next_state_id: 0,
+                                current_state_name: "Alive".into(),
+                                neighbor_state_name: "Alive".into(),
+                                next_state_name: "Dead".into(),
+                            },
+                        ];
+                    }
+
+                    ExampleModel::Wireworld => {
+                        self.states = vec![
+                            CAState {
+                                id: 0,
+                                name: "Empty".into(),
+                                color: Color::BLACK,
+                            },
+                            CAState {
+                                id: 1,
+                                name: "Electron Head".into(),
+                                color: Color::from_rgb8(0, 0, 255),
+                            },
+                            CAState {
+                                id: 2,
+                                name: "Electron Tail".into(),
+                                color: Color::from_rgb8(255, 0, 0),
+                            },
+                            CAState {
+                                id: 3,
+                                name: "Conductor".into(),
+                                color: Color::from_rgb8(255, 255, 0),
+                            },
+                        ];
+                        self.rules = vec![
+                            TransitionRule {
+                                current_state_id: 1, // Head -> Tail
+                                neighbor_state_id_to_count: vec![],
+                                operator: vec![],
+                                neighbor_count_threshold: vec![],
+                                combiner: vec![],
+                                next_state_id: 2,
+                                current_state_name: "Electron Head".into(),
+                                neighbor_state_name: "".into(),
+                                next_state_name: "Electron Tail".into(),
+                            },
+                            TransitionRule {
+                                current_state_id: 2, // Tail -> Conductor
+                                neighbor_state_id_to_count: vec![],
+                                operator: vec![],
+                                neighbor_count_threshold: vec![],
+                                combiner: vec![],
+                                next_state_id: 3,
+                                current_state_name: "Electron Tail".into(),
+                                neighbor_state_name: "".into(),
+                                next_state_name: "Conductor".into(),
+                            },
+                            TransitionRule {
+                                current_state_id: 3, // Conductor -> Head if 1 or 2 vizinhos are Head
+                                neighbor_state_id_to_count: vec![1],
+                                operator: vec![
+                                    RelationalOperator::Equals,
+                                    RelationalOperator::Equals,
+                                ],
+                                neighbor_count_threshold: vec![1, 2],
+                                combiner: vec![ConditionCombiner::Or],
+                                next_state_id: 1,
+                                current_state_name: "Conductor".into(),
+                                neighbor_state_name: "Electron Head".into(),
+                                next_state_name: "Electron Head".into(),
+                            },
+                        ];
+                    }
+
+                    ExampleModel::BrianBrain => {
+                        self.states = vec![
+                            CAState {
+                                id: 0,
+                                name: "Off".into(),
+                                color: Color::BLACK,
+                            },
+                            CAState {
+                                id: 1,
+                                name: "On".into(),
+                                color: Color::from_rgb8(0, 0, 255),
+                            },
+                            CAState {
+                                id: 2,
+                                name: "Dying".into(),
+                                color: Color::from_rgb8(255, 0, 0),
+                            },
+                        ];
+
+                        self.rules = vec![
+                            TransitionRule {
+                                current_state_id: 0, // Off -> On if 2 vizinhos are On
+                                neighbor_state_id_to_count: vec![1],
+                                operator: vec![RelationalOperator::Equals],
+                                neighbor_count_threshold: vec![2],
+                                combiner: vec![],
+                                next_state_id: 1,
+                                current_state_name: "Off".into(),
+                                neighbor_state_name: "On".into(),
+                                next_state_name: "On".into(),
+                            },
+                            TransitionRule {
+                                current_state_id: 1, // On -> Dying
+                                neighbor_state_id_to_count: vec![],
+                                operator: vec![],
+                                neighbor_count_threshold: vec![],
+                                combiner: vec![],
+                                next_state_id: 2,
+                                current_state_name: "On".into(),
+                                neighbor_state_name: "".into(),
+                                next_state_name: "Dying".into(),
+                            },
+                            TransitionRule {
+                                current_state_id: 2, // Dying -> Off
+                                neighbor_state_id_to_count: vec![],
+                                operator: vec![],
+                                neighbor_count_threshold: vec![],
+                                combiner: vec![],
+                                next_state_id: 0,
+                                current_state_name: "Dying".into(),
+                                neighbor_state_name: "".into(),
+                                next_state_name: "Off".into(),
+                            },
+                        ];
+                    }
+
+                    ExampleModel::TuringPatterns => {
+                        self.states = vec![
+                            CAState {
+                                id: 0,
+                                name: "Empty".into(),
+                                color: Color::BLACK,
+                            },
+                            CAState {
+                                id: 1,
+                                name: "Activator".into(),
+                                color: Color::from_rgb8(0, 200, 255),
+                            },
+                            CAState {
+                                id: 2,
+                                name: "Inhibitor".into(),
+                                color: Color::from_rgb8(255, 100, 0),
+                            },
+                        ];
+
+                        self.rules = vec![
+                            TransitionRule {
+                                current_state_id: 0, // Empty -> Activator if >=2 vizinhos Activator
+                                neighbor_state_id_to_count: vec![1],
+                                operator: vec![RelationalOperator::GreaterOrEqual],
+                                neighbor_count_threshold: vec![2],
+                                combiner: vec![],
+                                next_state_id: 1,
+                                current_state_name: "Empty".into(),
+                                neighbor_state_name: "Activator".into(),
+                                next_state_name: "Activator".into(),
+                            },
+                            TransitionRule {
+                                current_state_id: 1, // Activator -> Inhibitor if >=3 vizinhos Activator
+                                neighbor_state_id_to_count: vec![1],
+                                operator: vec![RelationalOperator::GreaterOrEqual],
+                                neighbor_count_threshold: vec![3],
+                                combiner: vec![],
+                                next_state_id: 2,
+                                current_state_name: "Activator".into(),
+                                neighbor_state_name: "Activator".into(),
+                                next_state_name: "Inhibitor".into(),
+                            },
+                            TransitionRule {
+                                current_state_id: 2, // Inhibitor -> Empty
+                                neighbor_state_id_to_count: vec![],
+                                operator: vec![],
+                                neighbor_count_threshold: vec![],
+                                combiner: vec![],
+                                next_state_id: 0,
+                                current_state_name: "Inhibitor".into(),
+                                neighbor_state_name: "".into(),
+                                next_state_name: "Empty".into(),
+                            },
+                        ];
+                    }
+
+                    ExampleModel::ForestFire => {
+                        self.states = vec![
+                            CAState {
+                                id: 0,
+                                name: "Empty".into(),
+                                color: Color::BLACK,
+                            },
+                            CAState {
+                                id: 1,
+                                name: "Tree".into(),
+                                color: Color::from_rgb8(0, 200, 0),
+                            },
+                            CAState {
+                                id: 2,
+                                name: "Burning".into(),
+                                color: Color::from_rgb8(255, 0, 0),
+                            },
+                        ];
+
+                        self.rules = vec![
+                            TransitionRule {
+                                current_state_id: 2, // Burning -> Empty
+                                neighbor_state_id_to_count: vec![],
+                                operator: vec![],
+                                neighbor_count_threshold: vec![],
+                                combiner: vec![],
+                                next_state_id: 0,
+                                current_state_name: "Burning".into(),
+                                neighbor_state_name: "".into(),
+                                next_state_name: "Empty".into(),
+                            },
+                            TransitionRule {
+                                current_state_id: 1, // Tree -> Burning if >=1 vizinho Burning
+                                neighbor_state_id_to_count: vec![2],
+                                operator: vec![RelationalOperator::GreaterOrEqual],
+                                neighbor_count_threshold: vec![1],
+                                combiner: vec![],
+                                next_state_id: 2,
+                                current_state_name: "Tree".into(),
+                                neighbor_state_name: "Burning".into(),
+                                next_state_name: "Burning".into(),
+                            },
+                            TransitionRule {
+                                current_state_id: 0, // Empty -> Tree (budding)
+                                neighbor_state_id_to_count: vec![],
+                                operator: vec![],
+                                neighbor_count_threshold: vec![],
+                                combiner: vec![],
+                                next_state_id: 1,
+                                current_state_name: "Empty".into(),
+                                neighbor_state_name: "".into(),
+                                next_state_name: "Tree".into(),
+                            },
+                        ];
+                    }
+                }
+
+                self.grid_cache.clear();
+            }
             Message::RuleCombinerSelected(idx, comb) => {
                 if idx < self.rule_form_conditions.len() {
                     self.rule_form_conditions[idx].combiner = Some(comb);
@@ -729,6 +1131,17 @@ impl Application for CASimulator {
 
 impl CASimulator {
     fn view_definition_tab(&self) -> Element<Message> {
+        let model_selector = column![
+            text("Load Example Model").size(20),
+            PickList::new(
+                ExampleModel::ALL.to_vec(),
+                None::<ExampleModel>,
+                Message::ExampleModelSelected,
+            )
+            .placeholder("Select a model"),
+        ]
+        .spacing(10)
+        .width(Length::Fill);
         // --- State Creation Panel ---
         let state_creation_panel = column![
             text("Create New State").size(20),
@@ -923,6 +1336,8 @@ impl CASimulator {
         Scrollable::new(
             Container::new(
                 column![
+                    model_selector,
+                    iced::widget::horizontal_rule(10),
                     state_creation_panel,
                     iced::widget::horizontal_rule(10),
                     states_panel,
@@ -1079,21 +1494,26 @@ impl CASimulator {
                             results.push(res);
                         }
 
-                        // combina os resultados
-                        let mut final_result = results[0];
-                        for i in 1..results.len() {
-                            let combiner = &rule.combiner[i - 1];
-                            let before = final_result;
-                            final_result = match combiner {
-                                ConditionCombiner::And => final_result && results[i],
-                                ConditionCombiner::Or => final_result || results[i],
-                                ConditionCombiner::Xor => final_result ^ results[i],
-                            };
-                            println!(
-                                "    Combinação {}: {:?} entre {} e {} = {}",
-                                i, combiner, before, results[i], final_result
-                            );
-                        }
+                        // If there are no conditions, consider it automatically true
+                        let final_result = if results.is_empty() {
+                            true
+                        } else {
+                            let mut res = results[0];
+                            for i in 1..results.len() {
+                                let combiner = &rule.combiner[i - 1];
+                                let before = res;
+                                res = match combiner {
+                                    ConditionCombiner::And => res && results[i],
+                                    ConditionCombiner::Or => res || results[i],
+                                    ConditionCombiner::Xor => res ^ results[i],
+                                };
+                                println!(
+                                    "    Combinação {}: {:?} entre {} e {} = {}",
+                                    i, combiner, before, results[i], res
+                                );
+                            }
+                            res
+                        };
 
                         println!("  Resultado final da regra {}: {}", rule_idx, final_result);
 
@@ -1229,3 +1649,5 @@ impl std::fmt::Display for CAState {
         write!(f, "{} (ID: {})", self.name, self.id)
     }
 }
+
+// TODO: allow creating a rule without any conditions
