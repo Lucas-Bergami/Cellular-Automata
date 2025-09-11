@@ -1,6 +1,8 @@
 GLC:
 
-S -> Estados Grupos Tamanho Regras
+S -> Tamanho Estados Grupos Regras
+
+Tamanho -> WIDTH  INT_CONST  HEIGHT  INT_CONST
 Estados ->  STATE  { Lista_de_Estados  }
 Lista_de_Estados -> ID Cor Lista2
 Cor -> ( INT_CONST ,  INT_CONST,  INT_CONST ) |  cadeia_vazia
@@ -8,8 +10,18 @@ Grupos ->  GROUP  ID { Lista_de_Grupos }
 Lista_de_Grupos ->  ID  Lista2
 Lista2 -> ,  ID  Cor  Lista2  |   cadeia_vazia
 
-Tamanho -> WIDTH  INT_CONST  HEIGHT  INT_CONST
-Regras -> Regra Regras |  cadeia_vazia
-Regra -> WHEN  ID  Expr -> ID
-Expr ->  &  ID Oprel INT_CONST  |  cadeia_vazia
+Regras -> RULES { Regra RegraOpc }
+RegraOpc -> Op  Regra RegraOpc | cadeia_vazia
+Op-> AND | OR | XOR
+Regra -> IF  ID  Expr  THEN  ID
+Expr -> Op  ID Oprel INT_CONST  Expr  |  cadeia_vazia
 Oprel -> > | >= | < | <= | != | ==
+
+WIDTH 50 HEIGHT 50     //Cria o grid com o tamanho definido
+STATE  { Alive (100, 50, 0), Dead(0,150,100)  }  //Criar um state e adicionar no final do vetor de estados
+RULES {   IF  Alive AND Alive == 2 THEN Alive      //Cria uma regra e adiciona no final do vetor de regras
+ IF  Alive AND Alive < 2 THEN Dead
+}
+
+
+
