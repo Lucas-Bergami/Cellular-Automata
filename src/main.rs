@@ -141,24 +141,52 @@ pub struct TransitionRule {
     pub next_state_id: u8,
     // For display
     pub current_state_name: String,
-    pub neighbor_state_name: String,
+    pub neighbor_state_names: Vec<String>,
     pub next_state_name: String,
 }
 
 impl TransitionRule {
     pub fn conditions_as_string(&self) -> String {
-        let mut parts = Vec::new();
-        for i in 0..self.neighbor_state_id_to_count.len() {
-            let cond_str = format!(
-                "count of '{}' {} {}",
-                self.neighbor_state_name, self.operator[i], self.neighbor_count_threshold[i],
-            );
-            parts.push(cond_str);
+        let n = self.neighbor_state_id_to_count.len();
+        if n == 0 {
+            return "(no conditions)".to_string();
+        }
 
-            if i < self.combiner.len() {
-                parts.push(format!("{:?}", self.combiner[i])); // AND / OR / XOR
+        let mut parts: Vec<String> = Vec::new();
+
+        for i in 0..n {
+            let neighbor_name = self
+                .neighbor_state_names
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| format!("State {}", self.neighbor_state_id_to_count[i]));
+
+            let op = self
+                .operator
+                .get(i)
+                .map(|o| o.to_string())
+                .unwrap_or("==".to_string());
+
+            let thr = self
+                .neighbor_count_threshold
+                .get(i)
+                .map(|t| t.to_string())
+                .unwrap_or("?".to_string());
+
+            let cond = format!("count({}) {} {}", neighbor_name, op, thr);
+
+            if i == 0 {
+                parts.push(cond);
+            } else {
+                let comb = self
+                    .combiner
+                    .get(i - 1)
+                    .map(|c| c.to_string())
+                    .unwrap_or("AND".to_string());
+                parts.push(format!("{} {}", comb, cond));
             }
         }
+
         parts.join(" ")
     }
 }
@@ -414,7 +442,7 @@ impl Application for CASimulator {
             initial_states.clone(),
         );
         let initial_rules = vec![
-            // Alive -> Alive (if vizinhos == 2)
+            // Alive -> Alive (if neighbors == 2)
             TransitionRule {
                 current_state_id: 1,
                 neighbor_state_id_to_count: vec![1],
@@ -423,10 +451,10 @@ impl Application for CASimulator {
                 combiner: vec![],
                 next_state_id: 1,
                 current_state_name: "Alive".into(),
-                neighbor_state_name: "Alive".into(),
+                neighbor_state_names: vec!["Alive".into()],
                 next_state_name: "Alive".into(),
             },
-            // Alive -> Alive (if vizinhos == 3)
+            // Alive -> Alive (if neighbors == 3)
             TransitionRule {
                 current_state_id: 1,
                 neighbor_state_id_to_count: vec![1],
@@ -435,10 +463,10 @@ impl Application for CASimulator {
                 combiner: vec![],
                 next_state_id: 1,
                 current_state_name: "Alive".into(),
-                neighbor_state_name: "Alive".into(),
+                neighbor_state_names: vec!["Alive".into()],
                 next_state_name: "Alive".into(),
             },
-            // Dead -> Alive (if vizinhos == 3)
+            // Dead -> Alive (if neighbors == 3)
             TransitionRule {
                 current_state_id: 0,
                 neighbor_state_id_to_count: vec![1],
@@ -447,10 +475,10 @@ impl Application for CASimulator {
                 combiner: vec![],
                 next_state_id: 1,
                 current_state_name: "Dead".into(),
-                neighbor_state_name: "Alive".into(),
+                neighbor_state_names: vec!["Alive".into()],
                 next_state_name: "Alive".into(),
             },
-            // Alive -> Dead (se vizinhos < 2)
+            // Alive -> Dead (if neighbors < 2)
             TransitionRule {
                 current_state_id: 1,
                 neighbor_state_id_to_count: vec![1],
@@ -459,10 +487,10 @@ impl Application for CASimulator {
                 combiner: vec![],
                 next_state_id: 0,
                 current_state_name: "Alive".into(),
-                neighbor_state_name: "Alive".into(),
+                neighbor_state_names: vec!["Alive".into()],
                 next_state_name: "Dead".into(),
             },
-            // Alive -> Dead (if vizinhos > 3)
+            // Alive -> Dead (if neighbors > 3)
             TransitionRule {
                 current_state_id: 1,
                 neighbor_state_id_to_count: vec![1],
@@ -471,7 +499,7 @@ impl Application for CASimulator {
                 combiner: vec![],
                 next_state_id: 0,
                 current_state_name: "Alive".into(),
-                neighbor_state_name: "Alive".into(),
+                neighbor_state_names: vec!["Alive".into()],
                 next_state_name: "Dead".into(),
             },
         ];
@@ -605,7 +633,7 @@ impl Application for CASimulator {
                                 combiner: vec![],
                                 next_state_id: 1,
                                 current_state_name: "Alive".into(),
-                                neighbor_state_name: "Alive".into(),
+                                neighbor_state_names: vec!["Alive".into()],
                                 next_state_name: "Alive".into(),
                             },
                             TransitionRule {
@@ -616,7 +644,7 @@ impl Application for CASimulator {
                                 combiner: vec![],
                                 next_state_id: 1,
                                 current_state_name: "Alive".into(),
-                                neighbor_state_name: "Alive".into(),
+                                neighbor_state_names: vec!["Alive".into()],
                                 next_state_name: "Alive".into(),
                             },
                             TransitionRule {
@@ -627,7 +655,7 @@ impl Application for CASimulator {
                                 combiner: vec![],
                                 next_state_id: 1,
                                 current_state_name: "Dead".into(),
-                                neighbor_state_name: "Alive".into(),
+                                neighbor_state_names: vec!["Alive".into()],
                                 next_state_name: "Alive".into(),
                             },
                             TransitionRule {
@@ -638,7 +666,7 @@ impl Application for CASimulator {
                                 combiner: vec![],
                                 next_state_id: 0,
                                 current_state_name: "Alive".into(),
-                                neighbor_state_name: "Alive".into(),
+                                neighbor_state_names: vec!["Alive".into()],
                                 next_state_name: "Dead".into(),
                             },
                             TransitionRule {
@@ -649,7 +677,7 @@ impl Application for CASimulator {
                                 combiner: vec![],
                                 next_state_id: 0,
                                 current_state_name: "Alive".into(),
-                                neighbor_state_name: "Alive".into(),
+                                neighbor_state_names: vec!["Alive".into()],
                                 next_state_name: "Dead".into(),
                             },
                         ];
@@ -687,7 +715,7 @@ impl Application for CASimulator {
                                 combiner: vec![],
                                 next_state_id: 2,
                                 current_state_name: "Electron Head".into(),
-                                neighbor_state_name: "".into(),
+                                neighbor_state_names: vec![],
                                 next_state_name: "Electron Tail".into(),
                             },
                             TransitionRule {
@@ -698,12 +726,12 @@ impl Application for CASimulator {
                                 combiner: vec![],
                                 next_state_id: 3,
                                 current_state_name: "Electron Tail".into(),
-                                neighbor_state_name: "".into(),
+                                neighbor_state_names: vec![],
                                 next_state_name: "Conductor".into(),
                             },
                             TransitionRule {
-                                current_state_id: 3, // Conductor -> Head if 1 or 2 vizinhos are Head
-                                neighbor_state_id_to_count: vec![1],
+                                current_state_id: 3, // Conductor -> Head if 1 or 2 neighbors are Head
+                                neighbor_state_id_to_count: vec![1, 1],
                                 operator: vec![
                                     RelationalOperator::Equals,
                                     RelationalOperator::Equals,
@@ -712,7 +740,10 @@ impl Application for CASimulator {
                                 combiner: vec![ConditionCombiner::Or],
                                 next_state_id: 1,
                                 current_state_name: "Conductor".into(),
-                                neighbor_state_name: "Electron Head".into(),
+                                neighbor_state_names: vec![
+                                    "Electron Head".into(),
+                                    "Electron Head".into(),
+                                ],
                                 next_state_name: "Electron Head".into(),
                             },
                         ];
@@ -739,14 +770,14 @@ impl Application for CASimulator {
 
                         self.rules = vec![
                             TransitionRule {
-                                current_state_id: 0, // Off -> On if 2 vizinhos are On
+                                current_state_id: 0, // Off -> On if 2 neighbors are On
                                 neighbor_state_id_to_count: vec![1],
                                 operator: vec![RelationalOperator::Equals],
                                 neighbor_count_threshold: vec![2],
                                 combiner: vec![],
                                 next_state_id: 1,
                                 current_state_name: "Off".into(),
-                                neighbor_state_name: "On".into(),
+                                neighbor_state_names: vec!["On".into()],
                                 next_state_name: "On".into(),
                             },
                             TransitionRule {
@@ -757,7 +788,7 @@ impl Application for CASimulator {
                                 combiner: vec![],
                                 next_state_id: 2,
                                 current_state_name: "On".into(),
-                                neighbor_state_name: "".into(),
+                                neighbor_state_names: vec![],
                                 next_state_name: "Dying".into(),
                             },
                             TransitionRule {
@@ -768,7 +799,7 @@ impl Application for CASimulator {
                                 combiner: vec![],
                                 next_state_id: 0,
                                 current_state_name: "Dying".into(),
-                                neighbor_state_name: "".into(),
+                                neighbor_state_names: vec![],
                                 next_state_name: "Off".into(),
                             },
                         ];
@@ -795,25 +826,25 @@ impl Application for CASimulator {
 
                         self.rules = vec![
                             TransitionRule {
-                                current_state_id: 0, // Empty -> Activator if >=2 vizinhos Activator
+                                current_state_id: 0, // Empty -> Activator if >=2 neighbors Activator
                                 neighbor_state_id_to_count: vec![1],
                                 operator: vec![RelationalOperator::GreaterOrEqual],
                                 neighbor_count_threshold: vec![2],
                                 combiner: vec![],
                                 next_state_id: 1,
                                 current_state_name: "Empty".into(),
-                                neighbor_state_name: "Activator".into(),
+                                neighbor_state_names: vec!["Activator".into()],
                                 next_state_name: "Activator".into(),
                             },
                             TransitionRule {
-                                current_state_id: 1, // Activator -> Inhibitor if >=3 vizinhos Activator
+                                current_state_id: 1, // Activator -> Inhibitor if >=3 neighbors Activator
                                 neighbor_state_id_to_count: vec![1],
                                 operator: vec![RelationalOperator::GreaterOrEqual],
                                 neighbor_count_threshold: vec![3],
                                 combiner: vec![],
                                 next_state_id: 2,
                                 current_state_name: "Activator".into(),
-                                neighbor_state_name: "Activator".into(),
+                                neighbor_state_names: vec!["Activator".into()],
                                 next_state_name: "Inhibitor".into(),
                             },
                             TransitionRule {
@@ -824,7 +855,7 @@ impl Application for CASimulator {
                                 combiner: vec![],
                                 next_state_id: 0,
                                 current_state_name: "Inhibitor".into(),
-                                neighbor_state_name: "".into(),
+                                neighbor_state_names: vec![],
                                 next_state_name: "Empty".into(),
                             },
                         ];
@@ -858,18 +889,18 @@ impl Application for CASimulator {
                                 combiner: vec![],
                                 next_state_id: 0,
                                 current_state_name: "Burning".into(),
-                                neighbor_state_name: "".into(),
+                                neighbor_state_names: vec![],
                                 next_state_name: "Empty".into(),
                             },
                             TransitionRule {
-                                current_state_id: 1, // Tree -> Burning if >=1 vizinho Burning
+                                current_state_id: 1, // Tree -> Burning if >=1 neighbor Burning
                                 neighbor_state_id_to_count: vec![2],
                                 operator: vec![RelationalOperator::GreaterOrEqual],
                                 neighbor_count_threshold: vec![1],
                                 combiner: vec![],
                                 next_state_id: 2,
                                 current_state_name: "Tree".into(),
-                                neighbor_state_name: "Burning".into(),
+                                neighbor_state_names: vec!["Burning".into()],
                                 next_state_name: "Burning".into(),
                             },
                             TransitionRule {
@@ -880,7 +911,7 @@ impl Application for CASimulator {
                                 combiner: vec![],
                                 next_state_id: 1,
                                 current_state_name: "Empty".into(),
-                                neighbor_state_name: "".into(),
+                                neighbor_state_names: vec![],
                                 next_state_name: "Tree".into(),
                             },
                         ];
@@ -952,10 +983,6 @@ impl Application for CASimulator {
                     }
                 };
 
-                if self.rule_form_conditions.is_empty() {
-                    errors.push("Nenhuma condição adicionada à regra".to_string());
-                }
-
                 let mut neighbor_ids: Vec<u8> = Vec::new();
                 let mut operators: Vec<RelationalOperator> = Vec::new();
                 let mut thresholds: Vec<u8> = Vec::new();
@@ -1002,6 +1029,20 @@ impl Application for CASimulator {
                 if !errors.is_empty() {
                     self.rule_form_error = Some(errors.join("; "));
                 } else {
+                    let neighbor_state_name = if neighbor_ids.is_empty() {
+                        String::new()
+                    } else {
+                        let mut names: Vec<String> = Vec::with_capacity(neighbor_ids.len());
+                        for id in &neighbor_ids {
+                            if let Some(s) = self.states.iter().find(|st| st.id == *id) {
+                                names.push(s.name.clone());
+                            } else {
+                                names.push(format!("State {}", id));
+                            }
+                        }
+                        names.join(",")
+                    };
+
                     self.rules.push(TransitionRule {
                         current_state_id: cur.id,
                         neighbor_state_id_to_count: neighbor_ids,
@@ -1010,7 +1051,15 @@ impl Application for CASimulator {
                         combiner: combiners,
                         next_state_id: nxt.id,
                         current_state_name: cur.name.clone(),
-                        neighbor_state_name: String::new(),
+                        neighbor_state_names: self
+                            .rule_form_conditions
+                            .iter()
+                            .map(|c| {
+                                c.neighbor_state
+                                    .as_ref()
+                                    .map_or("".into(), |s| s.name.clone())
+                            })
+                            .collect(),
                         next_state_name: nxt.name.clone(),
                     });
 
@@ -1306,7 +1355,7 @@ impl CASimulator {
                         col.push(
                             row![
                                 text(format!(
-                                    "IF current is '{}' {} THEN next is '{}'", //TODO:FIX
+                                    "IF current is '{}' {} THEN next is '{}'",
                                     rule.current_state_name,
                                     rule.conditions_as_string(),
                                     rule.next_state_name
@@ -1387,7 +1436,7 @@ impl CASimulator {
             ]
             .spacing(10),
             row![
-                text("Speed (Fast -> Slow):"),
+                text("Speed (Slow -> Fast):"),
                 Slider::new(
                     0.0..=100.0,
                     100.0 - ((self.simulation_speed_ms.saturating_sub(10)) as f32 / 9.9),
