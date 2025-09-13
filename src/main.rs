@@ -402,6 +402,7 @@ enum Message {
     RuleNextStateSelected(CAState),
     AddRule,
     RemoveRule(usize), // by index
+    ExportRules,
 
     // Grid/Simulation
     NeighborhoodChanged(Neighborhood),
@@ -1077,6 +1078,48 @@ impl Application for CASimulator {
                 }
             }
 
+            Message::ExportRules => {
+                use std::fs::File;
+                use std::io::Write;
+
+                let path = "exported_rules.txt";
+                if let Ok(mut file) = File::create(path) {
+                    writeln!(
+                        file,
+                        "WIDTH {} HEIGHT {}",
+                        self.grid.width, self.grid.height
+                    )
+                    .ok();
+                    // --- STATES ---
+                    writeln!(file, "STATE  {{").ok();
+                    for state in &self.states {
+                        let r = (state.color.r * 255.0).round() as u8;
+                        let g = (state.color.g * 255.0).round() as u8;
+                        let b = (state.color.b * 255.0).round() as u8;
+                        writeln!(file, "    {}({}, {}, {})", state.name, r, g, b).ok();
+                    }
+                    writeln!(file, "}}\n").ok();
+
+                    // --- RULES ---
+                    writeln!(file, "RULES {{").ok();
+                    for rule in &self.rules {
+                        let conditions = rule.conditions_as_string();
+                        writeln!(
+                            file,
+                            "    IF current is '{}' {} THEN next is '{}'",
+                            rule.current_state_name, conditions, rule.next_state_name
+                        )
+                        .ok();
+                    }
+                    writeln!(file, "}}").ok();
+
+                    println!("Rules and states exported to {}", path);
+                } else {
+                    println!("Error creating file: {}", path);
+                }
+
+                return Command::none();
+            }
             // --- Grid/Simulation Messages ---
             Message::NeighborhoodChanged(nb) => self.grid.neighborhood = nb,
             Message::GridWidthChanged(w) => self.grid_width_input = w,
@@ -1373,11 +1416,15 @@ impl CASimulator {
                 )
                 .into()
         };
+
+        let export_button = button("Export").on_press(Message::ExportRules).padding(5);
+
         let rules_panel = column![
             text("Defined Rules").size(20),
             Scrollable::new(rules_list)
                 .height(Length::Fixed(200.0))
                 .width(Length::Fill),
+            export_button, // botão de exportação
         ]
         .spacing(10)
         .width(Length::Fill);
