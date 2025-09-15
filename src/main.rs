@@ -2,14 +2,15 @@ use iced::widget::canvas::{self, Cache, Canvas, Geometry, Path, Stroke};
 use iced::widget::pane_grid::mouse_interaction;
 use iced::widget::text_input::cursor;
 use iced::widget::{
-    Button, Column, Container, PickList, Row, Scrollable, Slider, Text, TextInput, button, column,
-    container, pick_list, row, scrollable, slider, text, text_input,
+    Button, Column, Container, PickList, Row, Scrollable, Slider, Space, Text, TextInput, button,
+    column, container, pick_list, row, scrollable, slider, text, text_input,
 };
 use iced::{
     Alignment, Color, Command, Element, Length, Point, Rectangle, Renderer, Settings, Size,
     Subscription, Theme, Vector, theme,
 };
 use iced::{Application, executor};
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::time::{Duration, Instant};
 
@@ -338,6 +339,7 @@ struct ConditionForm {
 }
 
 struct CASimulator {
+    fullscreen_mode: bool,
     active_tab: TabId,
     states: Vec<CAState>,
     rules: Vec<TransitionRule>,
@@ -369,6 +371,8 @@ struct CASimulator {
 
     // For picking next state on canvas click
     selected_paint_state_id: u8,
+    mouse_pressed: Cell<bool>,
+    last_painted_cell: RefCell<Option<(usize, usize)>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -406,6 +410,7 @@ enum Message {
     ImportRules,
 
     // Grid/Simulation
+    ToggleFullscreen,
     NeighborhoodChanged(Neighborhood),
     GridWidthChanged(String),
     GridHeightChanged(String),
@@ -714,6 +719,7 @@ impl Application for CASimulator {
         ];
         (
             CASimulator {
+                fullscreen_mode: false,
                 active_tab: TabId::Definition,
                 states: initial_states,
                 rules: initial_rules,
@@ -739,6 +745,8 @@ impl Application for CASimulator {
                 grid_width_input: DEFAULT_GRID_WIDTH.to_string(),
                 grid_height_input: DEFAULT_GRID_HEIGHT.to_string(),
                 selected_paint_state_id: DEFAULT_STATE_ID,
+                mouse_pressed: Cell::new(false),
+                last_painted_cell: RefCell::new(None),
             },
             Command::none(),
         )
@@ -1420,6 +1428,9 @@ impl Application for CASimulator {
                 return Command::none();
             }
             // --- Grid/Simulation Messages ---
+            Message::ToggleFullscreen => {
+                self.fullscreen_mode = !self.fullscreen_mode;
+            }
             Message::NeighborhoodChanged(nb) => self.grid.neighborhood = nb,
             Message::GridWidthChanged(w) => self.grid_width_input = w,
             Message::GridHeightChanged(h) => self.grid_height_input = h,
@@ -1759,80 +1770,107 @@ impl CASimulator {
     }
 
     fn view_simulation_tab(&self) -> Element<Message> {
-        let controls = column![
-            text("Simulation Controls").size(20),
-            row![
-                text("Grid Width:"),
-                text_input("e.g., 50", &self.grid_width_input)
-                    .on_input(Message::GridWidthChanged)
-                    .padding(3)
-                    .width(Length::Fixed(60.0)),
-                text("Grid Height:"),
-                text_input("e.g., 40", &self.grid_height_input)
-                    .on_input(Message::GridHeightChanged)
-                    .padding(3)
-                    .width(Length::Fixed(60.0)),
-                button("Apply Size")
-                    .on_press(Message::ApplyGridSize)
-                    .padding(5),
-            ]
-            .spacing(10)
-            .align_items(Alignment::Center),
-            row![
+        if self.fullscreen_mode {
+            // Fullscreen mode: apenas o grid + botões essenciais
+            let controls = row![
                 button(if self.is_simulating { "Pause" } else { "Start" })
                     .on_press(Message::ToggleSimulation)
                     .padding(5),
                 button("Next Step").on_press(Message::NextStep).padding(5),
                 button("Reset Grid").on_press(Message::ResetGrid).padding(5),
-            ]
-            .spacing(10),
-            row![
-                text("Speed (Slow -> Fast):"),
-                Slider::new(
-                    0.0..=100.0,
-                    100.0 - ((self.simulation_speed_ms.saturating_sub(10)) as f32 / 9.9),
-                    Message::SimulationSpeedChanged
-                )
-                .width(Length::Fixed(200.0)),
+                button("Exit Fullscreen")
+                    .on_press(Message::ToggleFullscreen)
+                    .padding(5),
             ]
             .spacing(10)
-            .align_items(Alignment::Center),
-            text("Click on grid to paint state:"),
-            PickList::new(
-                self.states.clone(),
-                self.states
-                    .iter()
-                    .find(|s| s.id == self.selected_paint_state_id)
-                    .cloned(),
-                Message::PaintStateSelected
-            )
-            .placeholder("Select Paint State"),
-            PickList::new(
-                vec![
-                    Neighborhood::VonNeumann,
-                    Neighborhood::Moore,
-                    Neighborhood::ExtendedMoore
-                ],
-                Some(self.grid.neighborhood),
-                Message::NeighborhoodChanged
-            )
-            .placeholder("Select Neighborhood"),
-        ]
-        .spacing(15)
-        .width(Length::Fill); // faz o painel de controles expandir horizontalmente
+            .align_items(Alignment::Center);
 
-        let canvas = Canvas::new(self)
-            .width(Length::Fixed(600.0))
-            .height(Length::Fixed(600.0));
+            column![
+                controls,
+                Canvas::new(self).width(Length::Fill).height(Length::Fill)
+            ]
+            .spacing(20)
+            .align_items(Alignment::Center)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            // Modo normal: controles + canvas
+            let controls = column![
+                text("Simulation Controls").size(20),
+                row![
+                    text("Grid Width:"),
+                    text_input("e.g., 50", &self.grid_width_input)
+                        .on_input(Message::GridWidthChanged)
+                        .padding(3)
+                        .width(Length::Fixed(60.0)),
+                    text("Grid Height:"),
+                    text_input("e.g., 40", &self.grid_height_input)
+                        .on_input(Message::GridHeightChanged)
+                        .padding(3)
+                        .width(Length::Fixed(60.0)),
+                    button("Apply Size")
+                        .on_press(Message::ApplyGridSize)
+                        .padding(5),
+                    button("Fullscreen")
+                        .on_press(Message::ToggleFullscreen)
+                        .padding(5),
+                ]
+                .spacing(10)
+                .align_items(Alignment::Center),
+                row![
+                    button(if self.is_simulating { "Pause" } else { "Start" })
+                        .on_press(Message::ToggleSimulation)
+                        .padding(5),
+                    button("Next Step").on_press(Message::NextStep).padding(5),
+                    button("Reset Grid").on_press(Message::ResetGrid).padding(5),
+                ]
+                .spacing(10),
+                text("Click on grid to paint state:"),
+                PickList::new(
+                    self.states.clone(),
+                    self.states
+                        .iter()
+                        .find(|s| s.id == self.selected_paint_state_id)
+                        .cloned(),
+                    Message::PaintStateSelected
+                )
+                .placeholder("Select Paint State"),
+                PickList::new(
+                    vec![
+                        Neighborhood::VonNeumann,
+                        Neighborhood::Moore,
+                        Neighborhood::ExtendedMoore
+                    ],
+                    Some(self.grid.neighborhood),
+                    Message::NeighborhoodChanged
+                )
+                .placeholder("Select Neighborhood"),
+            ]
+            .spacing(15)
+            .width(Length::Fill);
 
-        Scrollable::new(
-            column![controls, canvas]
+            let canvas = Canvas::new(self)
+                .width(Length::Fixed(600.0))
+                .height(Length::Fixed(600.0));
+
+            Scrollable::new(
+                column![
+                    controls,
+                    row![
+                        Space::with_width(Length::Fill), // espaço à esquerda
+                        canvas,                          // o canvas no centro
+                        Space::with_width(Length::Fill), // espaço à direita
+                    ]
+                    .width(Length::Fill)
+                ]
                 .spacing(20)
-                .align_items(Alignment::Start) // alinha à esquerda para o scroll “grudar” no lado direito
-                .width(Length::Fill), // ocupa todo o espaço disponível
-        )
-        .width(Length::Fill) // garante que o Scrollable também preencha
-        .into()
+                .width(Length::Fill),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        }
     }
 
     // fn view_model_image_tab(&self) -> Element<Message> {
@@ -1973,7 +2011,7 @@ impl canvas::Program<Message> for CASimulator {
                         .states
                         .iter()
                         .find(|s| s.id == state_id)
-                        .map_or(Color::new(1.0, 0.0, 0.0, 1.0), |s| s.color); // Magenta for unknown state
+                        .map_or(Color::new(1.0, 0.0, 0.0, 1.0), |s| s.color); // RED for unknown state
 
                     let top_left = Point::new(c as f32 * cell_width, r as f32 * cell_height);
                     let size = Size::new(cell_width, cell_height);
@@ -2002,10 +2040,18 @@ impl canvas::Program<Message> for CASimulator {
         bounds: Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> (canvas::event::Status, Option<Message>) {
-        if let canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) =
-            event
-        {
-            // Pega a posição do cursor relativa ao canvas
+        match event {
+            canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
+                self.mouse_pressed.set(true);
+            }
+            canvas::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                self.mouse_pressed.set(false);
+                *self.last_painted_cell.borrow_mut() = None; // reseta quando solta
+            }
+            _ => {}
+        }
+
+        if self.mouse_pressed.get() {
             if let Some(position) = cursor.position_in(bounds) {
                 if self.grid.width > 0 && self.grid.height > 0 {
                     let cell_width = bounds.width / self.grid.width as f32;
@@ -2014,13 +2060,16 @@ impl canvas::Program<Message> for CASimulator {
                     let col = (position.x / cell_width) as usize;
                     let row = (position.y / cell_height) as usize;
 
-                    println!("Clique detectado em célula: linha {}, coluna {}", row, col);
-
                     if row < self.grid.height && col < self.grid.width {
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::PaintCell(row, col, self.selected_paint_state_id)),
-                        );
+                        // só pinta se for uma célula nova
+                        let mut last = self.last_painted_cell.borrow_mut();
+                        if last.map_or(true, |c| c != (row, col)) {
+                            *last = Some((row, col));
+                            return (
+                                canvas::event::Status::Captured,
+                                Some(Message::PaintCell(row, col, self.selected_paint_state_id)),
+                            );
+                        }
                     }
                 }
             }
@@ -2036,7 +2085,7 @@ impl canvas::Program<Message> for CASimulator {
         cursor: iced::mouse::Cursor,
     ) -> iced::mouse::Interaction {
         if cursor.is_over(bounds) {
-            iced::mouse::Interaction::Crosshair // Or Pointer, etc.
+            iced::mouse::Interaction::Crosshair
         } else {
             iced::mouse::Interaction::default()
         }
@@ -2049,5 +2098,3 @@ impl std::fmt::Display for CAState {
         write!(f, "{} (ID: {})", self.name, self.id)
     }
 }
-
-// TODO: allow creating a rule without any conditions
