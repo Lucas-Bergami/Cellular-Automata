@@ -403,6 +403,7 @@ enum Message {
     AddRule,
     RemoveRule(usize), // by index
     ExportRules,
+    ImportRules,
 
     // Grid/Simulation
     NeighborhoodChanged(Neighborhood),
@@ -416,6 +417,213 @@ enum Message {
     CanvasEvent(canvas::Event),  // To handle clicks on the canvas
     PaintStateSelected(CAState), // For selecting which state to paint on click
     PaintCell(usize, usize, u8),
+}
+
+fn parse_rule(line: &str, states: &[CAState]) -> Result<TransitionRule, String> {
+    println!("\n[DEBUG] Parsing rule line: {}", line);
+
+    let line = line.trim();
+
+    if !line.starts_with("IF current is") {
+        return Err("Line does not start with IF current is".into());
+    }
+
+    // Localiza a posição do "THEN next is"
+    let then_keyword = "THEN next is";
+    let then_pos = match line.find(then_keyword) {
+        Some(p) => p,
+        None => return Err("Missing THEN next is".into()),
+    };
+
+    // parte entre "IF current is" e "THEN next is"
+    let if_keyword = "IF current is";
+    let if_pos = line
+        .find(if_keyword)
+        .ok_or_else(|| "Missing IF current is".to_string())?;
+    let between = line[if_pos + if_keyword.len()..then_pos].trim(); // contém 'Current' e possivelmente condições
+    let then_part = line[then_pos + then_keyword.len()..].trim(); // contém 'NextState'
+
+    println!("[DEBUG] between (IF..THEN) = '{}'", between);
+    println!("[DEBUG] then_part (after THEN) = '{}'", then_part);
+
+    // --- extrai next state (entre aspas) ---
+    let next_name = if let Some(start) = then_part.find('\'') {
+        if let Some(rel_end) = then_part[start + 1..].find('\'') {
+            then_part[start + 1..start + 1 + rel_end].trim().to_string()
+        } else {
+            return Err("Malformed next state (missing closing quote)".into());
+        }
+    } else {
+        return Err("Malformed next state (missing opening quote)".into());
+    };
+
+    println!("[DEBUG] next_name = '{}'", next_name);
+
+    // --- extrai current state (entre aspas) dentro de `between` e obtém substring de condições após a aspa fechada ---
+    let (current_name, cond_substr) = if let Some(start) = between.find('\'') {
+        if let Some(rel_end) = between[start + 1..].find('\'') {
+            let name = between[start + 1..start + 1 + rel_end].trim().to_string();
+            let after = between[start + 1 + rel_end + 1..].trim(); // substring depois da aspa fechada
+            (name, after.to_string())
+        } else {
+            return Err("Malformed current state (missing closing quote)".into());
+        }
+    } else {
+        return Err("Malformed current state (missing opening quote)".into());
+    };
+
+    println!("[DEBUG] current_name = '{}'", current_name);
+    println!("[DEBUG] cond_substr   = '{}'", cond_substr);
+
+    // --- encontra ids nos states ---
+    let current_state_id = states
+        .iter()
+        .find(|s| s.name == current_name)
+        .map(|s| s.id)
+        .ok_or_else(|| format!("Unknown current state: {}", current_name))?;
+
+    let next_state_id = states
+        .iter()
+        .find(|s| s.name == next_name)
+        .map(|s| s.id)
+        .ok_or_else(|| format!("Unknown next state: {}", next_name))?;
+
+    println!("[DEBUG] current_state_id = {}", current_state_id);
+    println!("[DEBUG] next_state_id    = {}", next_state_id);
+
+    // --- parse das condições ---
+    let mut neighbor_state_id_to_count: Vec<u8> = Vec::new();
+    let mut neighbor_count_threshold: Vec<u8> = Vec::new();
+    let mut operator: Vec<RelationalOperator> = Vec::new();
+    let mut combiner: Vec<ConditionCombiner> = Vec::new();
+    let mut neighbor_state_names: Vec<String> = Vec::new();
+
+    let cond_trimmed = cond_substr.trim();
+    if cond_trimmed.is_empty() || cond_trimmed == "(no conditions)" {
+        println!("[DEBUG] No conditions for this rule.");
+    } else {
+        // tokens básicos separados por whitespace — mantém "count(X)" como um token
+        let tokens: Vec<&str> = cond_trimmed.split_whitespace().collect();
+        println!("[DEBUG] condition tokens = {:?}", tokens);
+
+        let mut i = 0usize;
+        while i < tokens.len() {
+            let tok = tokens[i];
+
+            if tok.starts_with("count(") {
+                // extrai nome dentro de count(...)
+                let name = tok
+                    .trim_start_matches("count(")
+                    .trim_end_matches(')')
+                    .to_string();
+                println!("[DEBUG] found count() name = '{}'", name);
+                neighbor_state_names.push(name.clone());
+
+                // encontra id do neighbor (fallback 0)
+                let neighbor_id = states
+                    .iter()
+                    .find(|s| s.name == name)
+                    .map(|s| s.id)
+                    .unwrap_or_else(|| {
+                        println!("[WARN] Unknown neighbor state name '{}', using id 0", name);
+                        0u8
+                    });
+                neighbor_state_id_to_count.push(neighbor_id);
+
+                // operador (next token)
+                if i + 1 < tokens.len() {
+                    let op_tok = tokens[i + 1];
+                    let op = match op_tok {
+                        "==" => RelationalOperator::Equals,
+                        "!=" => RelationalOperator::NotEquals,
+                        "<" => RelationalOperator::LessThan,
+                        "<=" => RelationalOperator::LessOrEqual,
+                        ">" => RelationalOperator::GreaterThan,
+                        ">=" => RelationalOperator::GreaterOrEqual,
+                        other => {
+                            println!(
+                                "[WARN] Unknown operator token '{}', defaulting to ==",
+                                other
+                            );
+                            RelationalOperator::Equals
+                        }
+                    };
+                    operator.push(op);
+                } else {
+                    println!("[WARN] Missing operator after count(...), defaulting ==");
+                    operator.push(RelationalOperator::Equals);
+                }
+
+                // threshold (next token after operator)
+                if i + 2 < tokens.len() {
+                    let thr_tok = tokens[i + 2];
+                    // thr_tok pode conter trailing punctuation, remova vírgulas/pares
+                    let thr_clean = thr_tok.trim_end_matches(',').trim();
+                    let thr = thr_clean.parse::<u8>().unwrap_or_else(|_| {
+                        println!("[WARN] Cannot parse threshold '{}', using 0", thr_clean);
+                        0u8
+                    });
+                    neighbor_count_threshold.push(thr);
+                } else {
+                    println!("[WARN] Missing threshold after operator, using 0");
+                    neighbor_count_threshold.push(0);
+                }
+
+                i += 3; // consumimos count(...), op, thr
+            } else {
+                // pode ser um combinador ou token inesperado
+                match tok {
+                    "AND" => {
+                        combiner.push(ConditionCombiner::And);
+                        println!("[DEBUG] found combiner AND");
+                        i += 1;
+                    }
+                    "OR" => {
+                        combiner.push(ConditionCombiner::Or);
+                        println!("[DEBUG] found combiner OR");
+                        i += 1;
+                    }
+                    "XOR" => {
+                        combiner.push(ConditionCombiner::Xor);
+                        println!("[DEBUG] found combiner XOR");
+                        i += 1;
+                    }
+                    other => {
+                        println!(
+                            "[DEBUG] Ignored unexpected token in conditions: '{}'",
+                            other
+                        );
+                        i += 1;
+                    }
+                }
+            }
+        } // while
+    } // else cond present
+
+    // debug final
+    println!(
+        "[DEBUG] Final neighbor_state_names = {:?}",
+        neighbor_state_names
+    );
+    println!(
+        "[DEBUG] Final neighbor_state_id_to_count = {:?}",
+        neighbor_state_id_to_count
+    );
+    println!("[DEBUG] Final operators = {:?}", operator);
+    println!("[DEBUG] Final thresholds = {:?}", neighbor_count_threshold);
+    println!("[DEBUG] Final combiners = {:?}", combiner);
+
+    Ok(TransitionRule {
+        current_state_id,
+        neighbor_state_id_to_count,
+        operator,
+        neighbor_count_threshold,
+        combiner,
+        next_state_id,
+        current_state_name: current_name.to_string(),
+        neighbor_state_names,
+        next_state_name: next_name.to_string(),
+    })
 }
 
 impl Application for CASimulator {
@@ -1120,6 +1328,97 @@ impl Application for CASimulator {
 
                 return Command::none();
             }
+
+            Message::ImportRules => {
+                use std::fs::File;
+                use std::io::{BufRead, BufReader};
+
+                let path_opt = rfd::FileDialog::new()
+                    .add_filter("Text Files", &["txt"])
+                    .pick_file();
+
+                if let Some(path) = path_opt {
+                    if let Ok(file) = File::open(&path) {
+                        let reader = BufReader::new(file);
+
+                        // Limpa estados e regras atuais
+                        self.states.clear();
+                        self.rules.clear();
+
+                        let mut grid_width = 0;
+                        let mut grid_height = 0;
+
+                        // Flags de contexto
+                        let mut in_states = false;
+                        let mut in_rules = false;
+
+                        for line in reader.lines().flatten() {
+                            let line = line.trim();
+
+                            // pula linhas vazias
+                            if line.is_empty() {
+                                continue;
+                            }
+
+                            if line.starts_with("WIDTH") {
+                                let parts: Vec<&str> = line.split_whitespace().collect();
+                                if parts.len() >= 4 {
+                                    grid_width = parts[1].parse::<usize>().unwrap_or(50);
+                                    grid_height = parts[3].parse::<usize>().unwrap_or(50);
+                                }
+                            } else if line.starts_with("STATE") && line.contains('{') {
+                                in_states = true;
+                                in_rules = false;
+                            } else if line.starts_with("RULES") && line.contains('{') {
+                                in_rules = true;
+                                in_states = false;
+                            } else if line == "}" {
+                                // fecha qualquer bloco
+                                in_states = false;
+                                in_rules = false;
+                            } else if in_states {
+                                // Parse de estado: nome(r,g,b)
+                                if let Some(start) = line.find('(') {
+                                    if let Some(end) = line.find(')') {
+                                        let name =
+                                            line[..start].trim().trim_end_matches(',').to_string();
+                                        let rgb: Vec<u8> = line[start + 1..end]
+                                            .split(',')
+                                            .map(|v| v.trim().parse().unwrap_or(0))
+                                            .collect();
+                                        let color = if rgb.len() == 3 {
+                                            Color::from_rgb8(rgb[0], rgb[1], rgb[2])
+                                        } else {
+                                            Color::from_rgb8(0, 0, 0)
+                                        };
+                                        let id = self.states.len() as u8;
+                                        self.states.push(CAState { id, name, color });
+                                    }
+                                }
+                            } else if in_rules {
+                                // Parse de regra
+                                if let Ok(rule) = parse_rule(line, &self.states) {
+                                    self.rules.push(rule);
+                                }
+                            }
+                        }
+
+                        // aplica tamanho do grid
+                        self.grid.width = grid_width;
+                        self.grid.height = grid_height;
+
+                        self.grid_cache.clear();
+
+                        println!("Imported rules, states and grid size from {:?}", path);
+                    } else {
+                        println!("Error opening file: {:?}", path);
+                    }
+                } else {
+                    println!("No file selected.");
+                }
+
+                return Command::none();
+            }
             // --- Grid/Simulation Messages ---
             Message::NeighborhoodChanged(nb) => self.grid.neighborhood = nb,
             Message::GridWidthChanged(w) => self.grid_width_input = w,
@@ -1417,14 +1716,19 @@ impl CASimulator {
                 .into()
         };
 
-        let export_button = button("Export").on_press(Message::ExportRules).padding(5);
+        let export_import_row = row![
+            button("Export Rules").on_press(Message::ExportRules),
+            button("Import Rules").on_press(Message::ImportRules),
+        ]
+        .spacing(10)
+        .align_items(Alignment::Center);
 
         let rules_panel = column![
             text("Defined Rules").size(20),
             Scrollable::new(rules_list)
                 .height(Length::Fixed(200.0))
                 .width(Length::Fill),
-            export_button, // botão de exportação
+            export_import_row, // botão de exportação
         ]
         .spacing(10)
         .width(Length::Fill);
