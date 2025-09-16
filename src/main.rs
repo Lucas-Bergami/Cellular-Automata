@@ -20,6 +20,7 @@ pub struct CAState {
     pub id: u8, // Simple numeric ID, also used as index
     pub name: String,
     pub color: iced::Color,
+    pub weight: u8,
 }
 
 // Relational operators for rules
@@ -220,20 +221,45 @@ impl fmt::Display for Neighborhood {
 
 impl CAGrid {
     pub fn new(width: usize, height: usize, states: Vec<CAState>) -> Self {
-        use rand::prelude::IndexedRandom;
-        use rand::rng;
+        use rand::Rng;
 
-        let mut rng = rng();
+        // Filtra apenas estados com peso > 0
+        let mut available_states: Vec<CAState> =
+            states.into_iter().filter(|s| s.weight > 0).collect();
 
-        let available_state_ids: Vec<u8> = states.iter().map(|s| s.id).collect();
+        // Se não houver estados com peso > 0, adiciona um estado padrão
+        if available_states.is_empty() {
+            available_states.push(CAState {
+                id: 0,
+                name: "Default".to_string(),
+                color: iced::Color::BLACK,
+                weight: 1,
+            });
+        }
 
+        // Soma total de pesos
+        let total_weight: u32 = available_states.iter().map(|s| s.weight as u32).sum();
+
+        let mut rng = rand::rng();
+
+        // Gera o grid
         let cells = (0..height)
             .map(|_| {
                 (0..width)
-                    .map(|_| *available_state_ids.choose(&mut rng).unwrap_or(&0))
-                    .collect()
+                    .map(|_| {
+                        let mut roll = rng.random_range(0..total_weight);
+                        for state in &available_states {
+                            if roll < state.weight as u32 {
+                                return state.id;
+                            }
+                            roll -= state.weight as u32;
+                        }
+                        // fallback, não deve ocorrer
+                        available_states[0].id
+                    })
+                    .collect::<Vec<u8>>()
             })
-            .collect();
+            .collect::<Vec<Vec<u8>>>();
 
         CAGrid {
             width,
@@ -406,6 +432,7 @@ enum Message {
     RuleNextStateSelected(CAState),
     AddRule,
     RemoveRule(usize), // by index
+    StateWeightChanged(usize, String),
     ExportRules,
     ImportRules,
 
@@ -643,11 +670,13 @@ impl Application for CASimulator {
                 id: 0,
                 name: "Dead".to_string(),
                 color: Color::BLACK,
+                weight: 5,
             },
             CAState {
                 id: 1,
                 name: "Alive".to_string(),
                 color: Color::new(0.0, 1.0, 0.0, 1.0),
+                weight: 5,
             },
         ];
         let grid = CAGrid::new(
@@ -793,6 +822,7 @@ impl Application for CASimulator {
                         id: new_id,
                         name: self.new_state_name.clone(),
                         color: Color::from_rgb8(r, g, b),
+                        weight: 1,
                     });
 
                     self.new_state_name.clear();
@@ -833,11 +863,13 @@ impl Application for CASimulator {
                                 id: 0,
                                 name: "Dead".into(),
                                 color: Color::BLACK,
+                                weight: 5,
                             },
                             CAState {
                                 id: 1,
                                 name: "Alive".into(),
                                 color: Color::from_rgb8(0, 255, 0),
+                                weight: 5,
                             },
                         ];
 
@@ -906,21 +938,25 @@ impl Application for CASimulator {
                                 id: 0,
                                 name: "Empty".into(),
                                 color: Color::BLACK,
+                                weight: 10,
                             },
                             CAState {
                                 id: 1,
                                 name: "Electron Head".into(),
                                 color: Color::from_rgb8(0, 0, 255),
+                                weight: 0,
                             },
                             CAState {
                                 id: 2,
                                 name: "Electron Tail".into(),
                                 color: Color::from_rgb8(255, 0, 0),
+                                weight: 0,
                             },
                             CAState {
                                 id: 3,
                                 name: "Conductor".into(),
                                 color: Color::from_rgb8(255, 255, 0),
+                                weight: 0,
                             },
                         ];
                         self.rules = vec![
@@ -972,16 +1008,19 @@ impl Application for CASimulator {
                                 id: 0,
                                 name: "Off".into(),
                                 color: Color::BLACK,
+                                weight: 10,
                             },
                             CAState {
                                 id: 1,
                                 name: "On".into(),
                                 color: Color::from_rgb8(0, 0, 255),
+                                weight: 10,
                             },
                             CAState {
                                 id: 2,
                                 name: "Dying".into(),
                                 color: Color::from_rgb8(255, 0, 0),
+                                weight: 10,
                             },
                         ];
 
@@ -1028,16 +1067,19 @@ impl Application for CASimulator {
                                 id: 0,
                                 name: "Empty".into(),
                                 color: Color::BLACK,
+                                weight: 10,
                             },
                             CAState {
                                 id: 1,
                                 name: "Activator".into(),
                                 color: Color::from_rgb8(0, 200, 255),
+                                weight: 5,
                             },
                             CAState {
                                 id: 2,
                                 name: "Inhibitor".into(),
                                 color: Color::from_rgb8(255, 100, 0),
+                                weight: 5,
                             },
                         ];
 
@@ -1084,16 +1126,19 @@ impl Application for CASimulator {
                                 id: 0,
                                 name: "Empty".into(),
                                 color: Color::BLACK,
+                                weight: 10,
                             },
                             CAState {
                                 id: 1,
                                 name: "Tree".into(),
                                 color: Color::from_rgb8(0, 200, 0),
+                                weight: 7,
                             },
                             CAState {
                                 id: 2,
                                 name: "Burning".into(),
                                 color: Color::from_rgb8(255, 0, 0),
+                                weight: 3,
                             },
                         ];
 
@@ -1185,6 +1230,7 @@ impl Application for CASimulator {
                         id: 0,
                         name: "".into(),
                         color: Color::WHITE,
+                        weight: 1,
                     }
                 };
 
@@ -1197,6 +1243,7 @@ impl Application for CASimulator {
                         id: 0,
                         name: "".into(),
                         color: Color::WHITE,
+                        weight: 1,
                     }
                 };
 
@@ -1293,7 +1340,15 @@ impl Application for CASimulator {
                     self.rules.remove(idx);
                 }
             }
-
+            Message::StateWeightChanged(idx, val) => {
+                if let Some(state) = self.states.get_mut(idx) {
+                    if val.trim().is_empty() {
+                        state.weight = 0;
+                    } else if let Ok(parsed) = val.parse::<u8>() {
+                        state.weight = parsed;
+                    }
+                }
+            }
             Message::ExportRules => {
                 use std::fs::File;
                 use std::io::Write;
@@ -1400,7 +1455,12 @@ impl Application for CASimulator {
                                             Color::from_rgb8(0, 0, 0)
                                         };
                                         let id = self.states.len() as u8;
-                                        self.states.push(CAState { id, name, color });
+                                        self.states.push(CAState {
+                                            id,
+                                            name,
+                                            color,
+                                            weight: 1, //TODO:read and write weight
+                                        });
                                     }
                                 }
                             } else if in_rules {
@@ -1574,30 +1634,37 @@ impl CASimulator {
         .spacing(10)
         .width(Length::Fill);
 
-        let states_list: Element<Message> = if self.states.is_empty() {
-            text("No states defined yet.").into()
-        } else {
-            self.states
-                .iter()
-                .enumerate()
-                .fold(
-                    Column::new().spacing(5).width(Length::Fill),
-                    |col, (idx, state)| {
-                        col.push(
-                            row![
-                                text(format!("{}: {}", state.id, state.name)).width(Length::Fill),
-                                button(text("Remove"))
-                                    .on_press(Message::RemoveState(idx))
-                                    .style(theme::Button::Destructive)
-                                    .padding(5),
-                            ]
-                            .spacing(10)
-                            .align_items(Alignment::Center),
-                        )
-                    },
-                )
-                .into()
-        };
+        let mut states_list = Column::new().spacing(10).width(Length::Fill);
+
+        for (idx, state) in self.states.iter().enumerate() {
+            states_list = states_list.push(
+                row![
+                    // Nome
+                    text(&state.name).width(Length::Fixed(120.0)),
+                    // Cor
+                    text(format!(
+                        "RGB: ({}, {}, {})",
+                        (state.color.r * 255.0) as u8,
+                        (state.color.g * 255.0) as u8,
+                        (state.color.b * 255.0) as u8
+                    ))
+                    .width(Length::Fixed(150.0)),
+                    // Peso
+                    text("Weight:").width(Length::Fixed(60.0)),
+                    text_input("Weight", &state.weight.to_string())
+                        .on_input(move |val| Message::StateWeightChanged(idx, val))
+                        .padding(5)
+                        .width(Length::Fixed(80.0)),
+                    // Remover
+                    button("Remove")
+                        .on_press(Message::RemoveState(idx))
+                        .style(theme::Button::Destructive)
+                        .padding(5),
+                ]
+                .spacing(10)
+                .align_items(Alignment::Center),
+            );
+        }
         let states_panel = column![
             text("Defined States").size(20),
             Scrollable::new(states_list)
@@ -1620,11 +1687,9 @@ impl CASimulator {
                 Message::RuleCurrentStateSelected,
             )
             .placeholder("Select Current State"),
-            // Condições
             text("AND the following conditions are met:"),
         ];
 
-        // Loop sobre as condições
         for idx in 0..self.rule_form_conditions.len() {
             let cond = &self.rule_form_conditions[idx];
 
@@ -1771,7 +1836,6 @@ impl CASimulator {
 
     fn view_simulation_tab(&self) -> Element<Message> {
         if self.fullscreen_mode {
-            // Fullscreen mode: apenas o grid + botões essenciais
             let controls = row![
                 button(if self.is_simulating { "Pause" } else { "Start" })
                     .on_press(Message::ToggleSimulation)
@@ -1795,7 +1859,6 @@ impl CASimulator {
             .height(Length::Fill)
             .into()
         } else {
-            // Modo normal: controles + canvas
             let controls = column![
                 text("Simulation Controls").size(20),
                 row![
@@ -1858,9 +1921,9 @@ impl CASimulator {
                 column![
                     controls,
                     row![
-                        Space::with_width(Length::Fill), // espaço à esquerda
-                        canvas,                          // o canvas no centro
-                        Space::with_width(Length::Fill), // espaço à direita
+                        Space::with_width(Length::Fill),
+                        canvas,
+                        Space::with_width(Length::Fill),
                     ]
                     .width(Length::Fill)
                 ]
@@ -2046,7 +2109,7 @@ impl canvas::Program<Message> for CASimulator {
             }
             canvas::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
                 self.mouse_pressed.set(false);
-                *self.last_painted_cell.borrow_mut() = None; // reseta quando solta
+                *self.last_painted_cell.borrow_mut() = None;
             }
             _ => {}
         }
