@@ -1889,6 +1889,17 @@ impl CASimulator {
                     button("Reset Grid").on_press(Message::ResetGrid).padding(5),
                 ]
                 .spacing(10),
+                row![
+                    text("Speed (Slow -> Fast):"),
+                    Slider::new(
+                        0.0..=100.0,
+                        100.0 - ((self.simulation_speed_ms.saturating_sub(10)) as f32 / 9.9),
+                        Message::SimulationSpeedChanged
+                    )
+                    .width(Length::Fixed(200.0)),
+                ]
+                .spacing(10)
+                .align_items(Alignment::Center),
                 text("Click on grid to paint state:"),
                 PickList::new(
                     self.states.clone(),
