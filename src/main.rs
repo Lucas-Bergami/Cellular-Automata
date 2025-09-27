@@ -2,14 +2,14 @@ use iced::widget::canvas::{self, Cache, Canvas, Geometry, Path, Stroke};
 use iced::widget::pane_grid::mouse_interaction;
 use iced::widget::text_input::cursor;
 use iced::widget::{
-    Button, Column, Container, PickList, Row, Scrollable, Slider, Space, Text, TextInput, button,
-    column, container, pick_list, row, scrollable, slider, text, text_input,
+    button, column, container, pick_list, row, scrollable, slider, text, text_input, Button,
+    Column, Container, PickList, Row, Scrollable, Slider, Space, Text, TextInput,
 };
+use iced::{executor, Application};
 use iced::{
-    Alignment, Color, Command, Element, Length, Point, Rectangle, Renderer, Settings, Size,
-    Subscription, Theme, Vector, theme,
+    theme, Alignment, Color, Command, Element, Length, Point, Rectangle, Renderer, Settings, Size,
+    Subscription, Theme, Vector,
 };
-use iced::{Application, executor};
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::time::{Duration, Instant};
@@ -139,6 +139,7 @@ pub struct TransitionRule {
     pub operator: Vec<RelationalOperator>,
     pub neighbor_count_threshold: Vec<u8>,
     pub combiner: Vec<ConditionCombiner>,
+    pub probability: f32,
 
     pub next_state_id: u8,
     // For display
@@ -384,12 +385,10 @@ struct CASimulator {
 
     // Rule creation
     rule_form_current_state: Option<CAState>,
-    rule_form_neighbor_state: Option<CAState>,
-    rule_form_operator: Option<RelationalOperator>,
-    rule_form_threshold: String,
     rule_form_next_state: Option<CAState>,
     rule_form_error: Option<String>,
     rule_form_conditions: Vec<ConditionForm>,
+    rule_form_probability: String,
 
     // Grid dimensions input
     grid_width_input: String,
@@ -413,6 +412,7 @@ enum Message {
     Tick(Instant),
 
     // State definition
+    RuleProbabilityChanged(String),
     StateNameChanged(String),
     StateColorRChanged(String),
     StateColorGChanged(String),
@@ -467,21 +467,59 @@ fn parse_rule(line: &str, states: &[CAState]) -> Result<TransitionRule, String> 
         None => return Err("Missing THEN next is".into()),
     };
 
-    // parte entre "IF current is" e "THEN next is"
     let if_keyword = "IF current is";
     let if_pos = line
         .find(if_keyword)
         .ok_or_else(|| "Missing IF current is".to_string())?;
-    let between = line[if_pos + if_keyword.len()..then_pos].trim(); // contém 'Current' e possivelmente condições
-    let then_part = line[then_pos + then_keyword.len()..].trim(); // contém 'NextState'
+    let between = line[if_pos + if_keyword.len()..then_pos].trim();
+    let then_part = line[then_pos + then_keyword.len()..].trim();
 
     println!("[DEBUG] between (IF..THEN) = '{}'", between);
     println!("[DEBUG] then_part (after THEN) = '{}'", then_part);
 
+    // --- extrai probabilidade (se houver) ---
+    let (then_core, probability) = if let Some(with_pos) = then_part.find("WITH PROB") {
+        let core = then_part[..with_pos].trim().to_string();
+
+        let prob_str_opt = then_part
+            .get(with_pos + 9..) // 9 = tamanho de "WITH PROB"
+            .map(|s| s.trim().split_whitespace().next());
+
+        let final_prob = if let Some(Some(p_str)) = prob_str_opt {
+            match p_str.parse::<f32>() {
+                Ok(p) => {
+                    let clamped = p.clamp(0.0, 1.0);
+                    if clamped != p {
+                        println!(
+                            "[WARN] Probability {} out of range [0.0, 1.0], clamped to {}",
+                            p, clamped
+                        );
+                    }
+                    clamped
+                }
+                Err(_) => {
+                    println!(
+                        "[WARN] Cannot parse probability '{}', defaulting to 1.0",
+                        p_str
+                    );
+                    1.0
+                }
+            }
+        } else {
+            println!("[WARN] Malformed probability format after 'WITH PROB', defaulting to 1.0");
+            1.0
+        };
+
+        println!("[DEBUG] probability = {}", final_prob);
+        (core, final_prob)
+    } else {
+        (then_part.to_string(), 1.0)
+    };
+
     // --- extrai next state (entre aspas) ---
-    let next_name = if let Some(start) = then_part.find('\'') {
-        if let Some(rel_end) = then_part[start + 1..].find('\'') {
-            then_part[start + 1..start + 1 + rel_end].trim().to_string()
+    let next_name = if let Some(start) = then_core.find('\'') {
+        if let Some(rel_end) = then_core[start + 1..].find('\'') {
+            then_core[start + 1..start + 1 + rel_end].trim().to_string()
         } else {
             return Err("Malformed next state (missing closing quote)".into());
         }
@@ -491,11 +529,11 @@ fn parse_rule(line: &str, states: &[CAState]) -> Result<TransitionRule, String> 
 
     println!("[DEBUG] next_name = '{}'", next_name);
 
-    // --- extrai current state (entre aspas) dentro de `between` e obtém substring de condições após a aspa fechada ---
+    // --- extrai current state ---
     let (current_name, cond_substr) = if let Some(start) = between.find('\'') {
         if let Some(rel_end) = between[start + 1..].find('\'') {
             let name = between[start + 1..start + 1 + rel_end].trim().to_string();
-            let after = between[start + 1 + rel_end + 1..].trim(); // substring depois da aspa fechada
+            let after = between[start + 1 + rel_end + 1..].trim();
             (name, after.to_string())
         } else {
             return Err("Malformed current state (missing closing quote)".into());
@@ -507,7 +545,6 @@ fn parse_rule(line: &str, states: &[CAState]) -> Result<TransitionRule, String> 
     println!("[DEBUG] current_name = '{}'", current_name);
     println!("[DEBUG] cond_substr   = '{}'", cond_substr);
 
-    // --- encontra ids nos states ---
     let current_state_id = states
         .iter()
         .find(|s| s.name == current_name)
@@ -520,49 +557,40 @@ fn parse_rule(line: &str, states: &[CAState]) -> Result<TransitionRule, String> 
         .map(|s| s.id)
         .ok_or_else(|| format!("Unknown next state: {}", next_name))?;
 
-    println!("[DEBUG] current_state_id = {}", current_state_id);
-    println!("[DEBUG] next_state_id    = {}", next_state_id);
-
-    // --- parse das condições ---
+    // --- parse conditions (igual ao seu código atual) ---
     let mut neighbor_state_id_to_count: Vec<u8> = Vec::new();
     let mut neighbor_count_threshold: Vec<u8> = Vec::new();
     let mut operator: Vec<RelationalOperator> = Vec::new();
     let mut combiner: Vec<ConditionCombiner> = Vec::new();
     let mut neighbor_state_names: Vec<String> = Vec::new();
 
-    let cond_trimmed = cond_substr.trim();
-    if cond_trimmed.is_empty() || cond_trimmed == "(no conditions)" {
-        println!("[DEBUG] No conditions for this rule.");
+    let cond_trimmed = if cond_substr.starts_with("AND") {
+        cond_substr[3..].trim().to_string()
     } else {
-        // tokens básicos separados por whitespace — mantém "count(X)" como um token
+        cond_substr.trim().to_string()
+    };
+
+    if !cond_trimmed.is_empty() && cond_trimmed != "(no conditions)" {
         let tokens: Vec<&str> = cond_trimmed.split_whitespace().collect();
         println!("[DEBUG] condition tokens = {:?}", tokens);
 
         let mut i = 0usize;
         while i < tokens.len() {
             let tok = tokens[i];
-
             if tok.starts_with("count(") {
-                // extrai nome dentro de count(...)
                 let name = tok
                     .trim_start_matches("count(")
                     .trim_end_matches(')')
                     .to_string();
-                println!("[DEBUG] found count() name = '{}'", name);
                 neighbor_state_names.push(name.clone());
 
-                // encontra id do neighbor (fallback 0)
                 let neighbor_id = states
                     .iter()
                     .find(|s| s.name == name)
                     .map(|s| s.id)
-                    .unwrap_or_else(|| {
-                        println!("[WARN] Unknown neighbor state name '{}', using id 0", name);
-                        0u8
-                    });
+                    .unwrap_or(0u8);
                 neighbor_state_id_to_count.push(neighbor_id);
 
-                // operador (next token)
                 if i + 1 < tokens.len() {
                     let op_tok = tokens[i + 1];
                     let op = match op_tok {
@@ -572,78 +600,42 @@ fn parse_rule(line: &str, states: &[CAState]) -> Result<TransitionRule, String> 
                         "<=" => RelationalOperator::LessOrEqual,
                         ">" => RelationalOperator::GreaterThan,
                         ">=" => RelationalOperator::GreaterOrEqual,
-                        other => {
-                            println!(
-                                "[WARN] Unknown operator token '{}', defaulting to ==",
-                                other
-                            );
-                            RelationalOperator::Equals
-                        }
+                        _ => RelationalOperator::Equals,
                     };
                     operator.push(op);
                 } else {
-                    println!("[WARN] Missing operator after count(...), defaulting ==");
                     operator.push(RelationalOperator::Equals);
                 }
 
-                // threshold (next token after operator)
                 if i + 2 < tokens.len() {
                     let thr_tok = tokens[i + 2];
-                    // thr_tok pode conter trailing punctuation, remova vírgulas/pares
                     let thr_clean = thr_tok.trim_end_matches(',').trim();
-                    let thr = thr_clean.parse::<u8>().unwrap_or_else(|_| {
-                        println!("[WARN] Cannot parse threshold '{}', using 0", thr_clean);
-                        0u8
-                    });
+                    let thr = thr_clean.parse::<u8>().unwrap_or(0u8);
                     neighbor_count_threshold.push(thr);
                 } else {
-                    println!("[WARN] Missing threshold after operator, using 0");
                     neighbor_count_threshold.push(0);
                 }
 
-                i += 3; // consumimos count(...), op, thr
+                i += 3;
             } else {
-                // pode ser um combinador ou token inesperado
                 match tok {
                     "AND" => {
                         combiner.push(ConditionCombiner::And);
-                        println!("[DEBUG] found combiner AND");
                         i += 1;
                     }
                     "OR" => {
                         combiner.push(ConditionCombiner::Or);
-                        println!("[DEBUG] found combiner OR");
                         i += 1;
                     }
                     "XOR" => {
                         combiner.push(ConditionCombiner::Xor);
-                        println!("[DEBUG] found combiner XOR");
                         i += 1;
                     }
-                    other => {
-                        println!(
-                            "[DEBUG] Ignored unexpected token in conditions: '{}'",
-                            other
-                        );
-                        i += 1;
-                    }
+                    _ => i += 1,
                 }
             }
-        } // while
-    } // else cond present
-
-    // debug final
-    println!(
-        "[DEBUG] Final neighbor_state_names = {:?}",
-        neighbor_state_names
-    );
-    println!(
-        "[DEBUG] Final neighbor_state_id_to_count = {:?}",
-        neighbor_state_id_to_count
-    );
-    println!("[DEBUG] Final operators = {:?}", operator);
-    println!("[DEBUG] Final thresholds = {:?}", neighbor_count_threshold);
-    println!("[DEBUG] Final combiners = {:?}", combiner);
+        }
+    }
 
     Ok(TransitionRule {
         current_state_id,
@@ -655,6 +647,7 @@ fn parse_rule(line: &str, states: &[CAState]) -> Result<TransitionRule, String> 
         current_state_name: current_name.to_string(),
         neighbor_state_names,
         next_state_name: next_name.to_string(),
+        probability,
     })
 }
 
@@ -696,6 +689,7 @@ impl Application for CASimulator {
                 current_state_name: "Alive".into(),
                 neighbor_state_names: vec!["Alive".into()],
                 next_state_name: "Alive".into(),
+                probability: 1.0,
             },
             // Alive -> Alive (if neighbors == 3)
             TransitionRule {
@@ -708,6 +702,7 @@ impl Application for CASimulator {
                 current_state_name: "Alive".into(),
                 neighbor_state_names: vec!["Alive".into()],
                 next_state_name: "Alive".into(),
+                probability: 1.0,
             },
             // Dead -> Alive (if neighbors == 3)
             TransitionRule {
@@ -720,6 +715,7 @@ impl Application for CASimulator {
                 current_state_name: "Dead".into(),
                 neighbor_state_names: vec!["Alive".into()],
                 next_state_name: "Alive".into(),
+                probability: 1.0,
             },
             // Alive -> Dead (if neighbors < 2)
             TransitionRule {
@@ -732,6 +728,7 @@ impl Application for CASimulator {
                 current_state_name: "Alive".into(),
                 neighbor_state_names: vec!["Alive".into()],
                 next_state_name: "Dead".into(),
+                probability: 1.0,
             },
             // Alive -> Dead (if neighbors > 3)
             TransitionRule {
@@ -744,6 +741,7 @@ impl Application for CASimulator {
                 current_state_name: "Alive".into(),
                 neighbor_state_names: vec!["Alive".into()],
                 next_state_name: "Dead".into(),
+                probability: 1.0,
             },
         ];
         (
@@ -762,11 +760,9 @@ impl Application for CASimulator {
                 new_state_color_r: "0".to_string(),
                 new_state_color_g: "0".to_string(),
                 new_state_color_b: "0".to_string(),
+                rule_form_probability: "1.0".to_string(),
 
                 rule_form_current_state: None,
-                rule_form_neighbor_state: None,
-                rule_form_operator: Some(RelationalOperator::Equals),
-                rule_form_threshold: "0".to_string(),
                 rule_form_next_state: None,
                 rule_form_error: None,
                 rule_form_conditions: vec![],
@@ -801,6 +797,9 @@ impl Application for CASimulator {
             Message::StateColorRChanged(r) => self.new_state_color_r = r,
             Message::StateColorGChanged(g) => self.new_state_color_g = g,
             Message::StateColorBChanged(b) => self.new_state_color_b = b,
+            Message::RuleProbabilityChanged(val) => {
+                self.rule_form_probability = val;
+            }
             Message::AddState => {
                 if !self.new_state_name.trim().is_empty() {
                     let r = self.new_state_color_r.parse::<u8>().unwrap_or(0);
@@ -884,6 +883,7 @@ impl Application for CASimulator {
                                 current_state_name: "Alive".into(),
                                 neighbor_state_names: vec!["Alive".into()],
                                 next_state_name: "Alive".into(),
+                                probability: 1.0,
                             },
                             TransitionRule {
                                 current_state_id: 1,
@@ -895,6 +895,7 @@ impl Application for CASimulator {
                                 current_state_name: "Alive".into(),
                                 neighbor_state_names: vec!["Alive".into()],
                                 next_state_name: "Alive".into(),
+                                probability: 1.0,
                             },
                             TransitionRule {
                                 current_state_id: 0,
@@ -906,6 +907,7 @@ impl Application for CASimulator {
                                 current_state_name: "Dead".into(),
                                 neighbor_state_names: vec!["Alive".into()],
                                 next_state_name: "Alive".into(),
+                                probability: 1.0,
                             },
                             TransitionRule {
                                 current_state_id: 1,
@@ -917,6 +919,7 @@ impl Application for CASimulator {
                                 current_state_name: "Alive".into(),
                                 neighbor_state_names: vec!["Alive".into()],
                                 next_state_name: "Dead".into(),
+                                probability: 1.0,
                             },
                             TransitionRule {
                                 current_state_id: 1,
@@ -928,6 +931,7 @@ impl Application for CASimulator {
                                 current_state_name: "Alive".into(),
                                 neighbor_state_names: vec!["Alive".into()],
                                 next_state_name: "Dead".into(),
+                                probability: 1.0,
                             },
                         ];
                     }
@@ -942,13 +946,13 @@ impl Application for CASimulator {
                             },
                             CAState {
                                 id: 1,
-                                name: "Electron Head".into(),
+                                name: "ElectronHead".into(),
                                 color: Color::from_rgb8(0, 0, 255),
                                 weight: 0,
                             },
                             CAState {
                                 id: 2,
-                                name: "Electron Tail".into(),
+                                name: "ElectronTail".into(),
                                 color: Color::from_rgb8(255, 0, 0),
                                 weight: 0,
                             },
@@ -967,9 +971,10 @@ impl Application for CASimulator {
                                 neighbor_count_threshold: vec![],
                                 combiner: vec![],
                                 next_state_id: 2,
-                                current_state_name: "Electron Head".into(),
+                                current_state_name: "ElectronHead".into(),
                                 neighbor_state_names: vec![],
-                                next_state_name: "Electron Tail".into(),
+                                next_state_name: "ElectronTail".into(),
+                                probability: 1.0,
                             },
                             TransitionRule {
                                 current_state_id: 2, // Tail -> Conductor
@@ -978,9 +983,10 @@ impl Application for CASimulator {
                                 neighbor_count_threshold: vec![],
                                 combiner: vec![],
                                 next_state_id: 3,
-                                current_state_name: "Electron Tail".into(),
+                                current_state_name: "ElectronTail".into(),
                                 neighbor_state_names: vec![],
                                 next_state_name: "Conductor".into(),
+                                probability: 1.0,
                             },
                             TransitionRule {
                                 current_state_id: 3, // Conductor -> Head if 1 or 2 neighbors are Head
@@ -994,10 +1000,11 @@ impl Application for CASimulator {
                                 next_state_id: 1,
                                 current_state_name: "Conductor".into(),
                                 neighbor_state_names: vec![
-                                    "Electron Head".into(),
-                                    "Electron Head".into(),
+                                    "ElectronHead".into(),
+                                    "ElectronHead".into(),
                                 ],
-                                next_state_name: "Electron Head".into(),
+                                next_state_name: "ElectronHead".into(),
+                                probability: 1.0,
                             },
                         ];
                     }
@@ -1035,6 +1042,7 @@ impl Application for CASimulator {
                                 current_state_name: "Off".into(),
                                 neighbor_state_names: vec!["On".into()],
                                 next_state_name: "On".into(),
+                                probability: 1.0,
                             },
                             TransitionRule {
                                 current_state_id: 1, // On -> Dying
@@ -1046,6 +1054,7 @@ impl Application for CASimulator {
                                 current_state_name: "On".into(),
                                 neighbor_state_names: vec![],
                                 next_state_name: "Dying".into(),
+                                probability: 1.0,
                             },
                             TransitionRule {
                                 current_state_id: 2, // Dying -> Off
@@ -1057,6 +1066,7 @@ impl Application for CASimulator {
                                 current_state_name: "Dying".into(),
                                 neighbor_state_names: vec![],
                                 next_state_name: "Off".into(),
+                                probability: 1.0,
                             },
                         ];
                     }
@@ -1094,6 +1104,7 @@ impl Application for CASimulator {
                                 current_state_name: "Empty".into(),
                                 neighbor_state_names: vec!["Activator".into()],
                                 next_state_name: "Activator".into(),
+                                probability: 1.0,
                             },
                             TransitionRule {
                                 current_state_id: 1, // Activator -> Inhibitor if >=3 neighbors Activator
@@ -1105,6 +1116,7 @@ impl Application for CASimulator {
                                 current_state_name: "Activator".into(),
                                 neighbor_state_names: vec!["Activator".into()],
                                 next_state_name: "Inhibitor".into(),
+                                probability: 1.0,
                             },
                             TransitionRule {
                                 current_state_id: 2, // Inhibitor -> Empty
@@ -1116,6 +1128,7 @@ impl Application for CASimulator {
                                 current_state_name: "Inhibitor".into(),
                                 neighbor_state_names: vec![],
                                 next_state_name: "Empty".into(),
+                                probability: 1.0,
                             },
                         ];
                     }
@@ -1153,6 +1166,7 @@ impl Application for CASimulator {
                                 current_state_name: "Burning".into(),
                                 neighbor_state_names: vec![],
                                 next_state_name: "Empty".into(),
+                                probability: 0.8,
                             },
                             TransitionRule {
                                 current_state_id: 1, // Tree -> Burning if >=1 neighbor Burning
@@ -1164,6 +1178,7 @@ impl Application for CASimulator {
                                 current_state_name: "Tree".into(),
                                 neighbor_state_names: vec!["Burning".into()],
                                 next_state_name: "Burning".into(),
+                                probability: 0.5,
                             },
                             TransitionRule {
                                 current_state_id: 0, // Empty -> Tree (budding)
@@ -1175,6 +1190,7 @@ impl Application for CASimulator {
                                 current_state_name: "Empty".into(),
                                 neighbor_state_names: vec![],
                                 next_state_name: "Tree".into(),
+                                probability: 0.3,
                             },
                         ];
                     }
@@ -1307,6 +1323,15 @@ impl Application for CASimulator {
                         names.join(",")
                     };
 
+                    let probability: f32 = match self.rule_form_probability.parse::<f32>() {
+                        Ok(p) if (0.0..=1.0).contains(&p) => p,
+                        _ => {
+                            errors
+                                .push("Probabilidade inválida (use valor entre 0.0 e 1.0)".into());
+                            1.0
+                        }
+                    };
+
                     self.rules.push(TransitionRule {
                         current_state_id: cur.id,
                         neighbor_state_id_to_count: neighbor_ids,
@@ -1325,6 +1350,7 @@ impl Application for CASimulator {
                             })
                             .collect(),
                         next_state_name: nxt.name.clone(),
+                        probability,
                     });
 
                     // Reset form
@@ -1353,40 +1379,52 @@ impl Application for CASimulator {
                 use std::fs::File;
                 use std::io::Write;
 
-                let path = "exported_rules.txt";
-                if let Ok(mut file) = File::create(path) {
-                    writeln!(
-                        file,
-                        "WIDTH {} HEIGHT {}",
-                        self.grid.width, self.grid.height
-                    )
-                    .ok();
-                    // --- STATES ---
-                    writeln!(file, "STATE  {{").ok();
-                    for state in &self.states {
-                        let r = (state.color.r * 255.0).round() as u8;
-                        let g = (state.color.g * 255.0).round() as u8;
-                        let b = (state.color.b * 255.0).round() as u8;
-                        writeln!(file, "    {}({}, {}, {})", state.name, r, g, b).ok();
-                    }
-                    writeln!(file, "}}\n").ok();
-
-                    // --- RULES ---
-                    writeln!(file, "RULES {{").ok();
-                    for rule in &self.rules {
-                        let conditions = rule.conditions_as_string();
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("Salvar regras")
+                    .add_filter("Arquivo de texto", &["txt"])
+                    .save_file()
+                {
+                    if let Ok(mut file) = File::create(&path) {
                         writeln!(
                             file,
-                            "    IF current is '{}' {} THEN next is '{}'",
-                            rule.current_state_name, conditions, rule.next_state_name
+                            "WIDTH {} HEIGHT {}",
+                            self.grid.width, self.grid.height
                         )
                         .ok();
-                    }
-                    writeln!(file, "}}").ok();
 
-                    println!("Rules and states exported to {}", path);
+                        // --- STATES ---
+                        writeln!(file, "STATE {{").ok();
+                        for state in &self.states {
+                            let r = (state.color.r * 255.0).round() as u8;
+                            let g = (state.color.g * 255.0).round() as u8;
+                            let b = (state.color.b * 255.0).round() as u8;
+                            let w = state.weight;
+                            writeln!(file, "    {}({}, {}, {}, {})", state.name, r, g, b, w).ok();
+                        }
+                        writeln!(file, "}}\n").ok();
+
+                        // --- RULES ---
+                        writeln!(file, "RULES {{").ok();
+                        for rule in &self.rules {
+                            let conditions = rule.conditions_as_string();
+                            writeln!(
+                                file,
+                                "    IF current is '{}' AND {} THEN next is '{}' WITH PROB {}",
+                                rule.current_state_name,
+                                conditions,
+                                rule.next_state_name,
+                                rule.probability
+                            )
+                            .ok();
+                        }
+                        writeln!(file, "}}").ok();
+
+                        println!("Rules, states and probabilities exported to {:?}", path);
+                    } else {
+                        println!("Error creating file: {:?}", path);
+                    }
                 } else {
-                    println!("Error creating file: {}", path);
+                    println!("Export canceled by user");
                 }
 
                 return Command::none();
@@ -1418,7 +1456,6 @@ impl Application for CASimulator {
                         for line in reader.lines().flatten() {
                             let line = line.trim();
 
-                            // pula linhas vazias
                             if line.is_empty() {
                                 continue;
                             }
@@ -1436,42 +1473,45 @@ impl Application for CASimulator {
                                 in_rules = true;
                                 in_states = false;
                             } else if line == "}" {
-                                // fecha qualquer bloco
                                 in_states = false;
                                 in_rules = false;
                             } else if in_states {
-                                // Parse de estado: nome(r,g,b)
+                                // Parse de estado: nome(r,g,b,weight)
                                 if let Some(start) = line.find('(') {
                                     if let Some(end) = line.find(')') {
                                         let name =
                                             line[..start].trim().trim_end_matches(',').to_string();
-                                        let rgb: Vec<u8> = line[start + 1..end]
+                                        let nums: Vec<u8> = line[start + 1..end]
                                             .split(',')
                                             .map(|v| v.trim().parse().unwrap_or(0))
                                             .collect();
-                                        let color = if rgb.len() == 3 {
-                                            Color::from_rgb8(rgb[0], rgb[1], rgb[2])
+
+                                        let (r, g, b, weight) = if nums.len() == 4 {
+                                            (nums[0], nums[1], nums[2], nums[3])
+                                        } else if nums.len() == 3 {
+                                            (nums[0], nums[1], nums[2], 1)
                                         } else {
-                                            Color::from_rgb8(0, 0, 0)
+                                            (0, 0, 0, 1)
                                         };
+
+                                        let color = Color::from_rgb8(r, g, b);
                                         let id = self.states.len() as u8;
+
                                         self.states.push(CAState {
                                             id,
                                             name,
                                             color,
-                                            weight: 1, //TODO:read and write weight
+                                            weight,
                                         });
                                     }
                                 }
                             } else if in_rules {
-                                // Parse de regra
                                 if let Ok(rule) = parse_rule(line, &self.states) {
                                     self.rules.push(rule);
                                 }
                             }
                         }
 
-                        // aplica tamanho do grid
                         self.grid.width = grid_width;
                         self.grid.height = grid_height;
 
@@ -1753,6 +1793,14 @@ impl CASimulator {
             .placeholder("Select Next State"),
         );
 
+        rule_creation_panel = rule_creation_panel
+            .push(text("Probability (0.0 - 1.0):"))
+            .push(
+                text_input("e.g., 0.8", &self.rule_form_probability)
+                    .on_input(Message::RuleProbabilityChanged)
+                    .padding(5)
+                    .width(Length::Fixed(100.0)),
+            );
         rule_creation_panel =
             rule_creation_panel.push(button("Add Rule").on_press(Message::AddRule).padding(5));
 
@@ -1773,10 +1821,11 @@ impl CASimulator {
                         col.push(
                             row![
                                 text(format!(
-                                    "IF current is '{}' {} THEN next is '{}'",
+                                    "IF current is '{}' AND {} THEN next is '{}' WITH PROB '{}'",
                                     rule.current_state_name,
                                     rule.conditions_as_string(),
-                                    rule.next_state_name
+                                    rule.next_state_name,
+                                    rule.probability
                                 ))
                                 .width(Length::Fill),
                                 button(text("Remove"))
@@ -1964,12 +2013,15 @@ impl CASimulator {
     // }
 
     fn step_simulation_logic(&mut self) {
+        use rand::Rng;
+
         if self.states.is_empty() {
             return;
         } // No states, nothing to do
 
         let mut next_grid_cells = self.grid.cells.clone();
         let current_grid = &self.grid; // Immutable borrow for reading
+        let mut rng = rand::rng();
 
         for r in 0..current_grid.height {
             for c in 0..current_grid.width {
@@ -1983,9 +2035,19 @@ impl CASimulator {
 
                 for (rule_idx, rule) in self.rules.iter().enumerate() {
                     if rule.current_state_id == current_cell_state_id {
+                        // Probabilidade de ativação
+                        let roll: f32 = rng.random();
+                        if roll > rule.probability {
+                            println!(
+                                "  Regra {} NÃO ativada por probabilidade (roll={} > {})",
+                                rule_idx, roll, rule.probability
+                            );
+                            continue;
+                        }
+
                         println!(
-                            "  Testando regra {} -> next {}",
-                            rule_idx, rule.next_state_id
+                            "  Testando regra {} -> next {} (roll={} <= prob={})",
+                            rule_idx, rule.next_state_id, roll, rule.probability
                         );
 
                         let mut results = Vec::new();
