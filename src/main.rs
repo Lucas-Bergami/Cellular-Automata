@@ -1,16 +1,14 @@
 use iced::widget::canvas::{self, Cache, Canvas, Geometry, Path, Stroke};
-use iced::widget::pane_grid::mouse_interaction;
-use iced::widget::text_input::cursor;
 use iced::widget::{
-    Button, Column, Container, PickList, Row, Scrollable, Slider, Space, Text, TextInput, button,
-    column, container, pick_list, row, scrollable, slider, text, text_input,
+    Column, Container, PickList, Scrollable, Slider, Space, button, column, row, text, text_input,
 };
 use iced::{
     Alignment, Color, Command, Element, Length, Point, Rectangle, Renderer, Settings, Size,
     Subscription, Theme, Vector, theme,
 };
 use iced::{Application, executor};
-use iced_core::widget::Widget;
+use rand::Rng;
+use rayon::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::time::{Duration, Instant};
@@ -18,7 +16,7 @@ use std::time::{Duration, Instant};
 // Represents a single state in the CA
 #[derive(Debug, Clone, PartialEq)]
 pub struct CAState {
-    pub id: u8, // Simple numeric ID, also used as index
+    pub id: u8,
     pub name: String,
     pub color: iced::Color,
     pub weight: u8,
@@ -143,7 +141,6 @@ pub struct TransitionRule {
     pub probability: f32,
 
     pub next_state_id: u8,
-    // For display
     pub current_state_name: String,
     pub neighbor_state_names: Vec<String>,
     pub next_state_name: String,
@@ -222,14 +219,17 @@ impl fmt::Display for Neighborhood {
 }
 
 impl CAGrid {
-    pub fn new(width: usize, height: usize, states: Vec<CAState>) -> Self {
+    pub fn new(
+        width: usize,
+        height: usize,
+        states: Vec<CAState>,
+        neighborhood: Neighborhood,
+    ) -> Self {
         use rand::Rng;
 
-        // Filtra apenas estados com peso > 0
         let mut available_states: Vec<CAState> =
             states.into_iter().filter(|s| s.weight > 0).collect();
 
-        // Se não houver estados com peso > 0, adiciona um estado padrão
         if available_states.is_empty() {
             available_states.push(CAState {
                 id: 0,
@@ -239,12 +239,10 @@ impl CAGrid {
             });
         }
 
-        // Soma total de pesos
         let total_weight: u32 = available_states.iter().map(|s| s.weight as u32).sum();
 
         let mut rng = rand::rng();
 
-        // Gera o grid
         let cells = (0..height)
             .map(|_| {
                 (0..width)
@@ -256,7 +254,6 @@ impl CAGrid {
                             }
                             roll -= state.weight as u32;
                         }
-                        // fallback, não deve ocorrer
                         available_states[0].id
                     })
                     .collect::<Vec<u8>>()
@@ -267,7 +264,7 @@ impl CAGrid {
             width,
             height,
             cells,
-            neighborhood: Neighborhood::Moore,
+            neighborhood,
         }
     }
 
@@ -319,10 +316,13 @@ impl CAGrid {
             let nr = r as isize + dr;
             let nc = c as isize + dc;
 
-            if nr >= 0 && nr < self.height as isize && nc >= 0 && nc < self.width as isize {
-                if self.cells[nr as usize][nc as usize] == target_state_id {
-                    count += 1;
-                }
+            if nr >= 0
+                && nr < self.height as isize
+                && nc >= 0
+                && nc < self.width as isize
+                && self.cells[nr as usize][nc as usize] == target_state_id
+            {
+                count += 1;
             }
         }
         count
@@ -414,7 +414,7 @@ enum TabId {
 #[derive(Debug, Clone)]
 enum Message {
     TabSelected(TabId),
-    Tick(Instant),
+    Tick(()),
 
     // State definition
     RuleProbabilityChanged(String),
@@ -451,7 +451,6 @@ enum Message {
     ToggleSimulation,
     NextStep,
     SimulationSpeedChanged(f32), // From slider (0-100), map to ms
-    CanvasEvent(canvas::Event),  // To handle clicks on the canvas
     PaintStateSelected(CAState), // For selecting which state to paint on click
     PaintCell(usize, usize, u8),
 }
@@ -681,6 +680,7 @@ impl Application for CASimulator {
             DEFAULT_GRID_WIDTH,
             DEFAULT_GRID_HEIGHT,
             initial_states.clone(),
+            Neighborhood::Moore,
         );
         let initial_rules = vec![
             // Alive -> Alive (if neighbors == 2)
@@ -795,7 +795,7 @@ impl Application for CASimulator {
             Message::TabSelected(tab) => {
                 self.active_tab = tab;
             }
-            Message::Tick(_) => {
+            Message::Tick(()) => {
                 if self.is_simulating {
                     self.step_simulation_logic();
                 }
@@ -1278,7 +1278,6 @@ impl Application for CASimulator {
                 let mut combiners: Vec<ConditionCombiner> = Vec::new();
 
                 for (idx, cond) in self.rule_form_conditions.iter().enumerate() {
-                    // Neighbor state
                     if let Some(state) = &cond.neighbor_state {
                         neighbor_ids.push(state.id);
                     } else {
@@ -1289,7 +1288,6 @@ impl Application for CASimulator {
                         neighbor_ids.push(0);
                     }
 
-                    // Operator
                     if let Some(op) = cond.operator {
                         operators.push(op);
                     } else {
@@ -1297,7 +1295,6 @@ impl Application for CASimulator {
                         operators.push(RelationalOperator::Equals);
                     }
 
-                    // Threshold
                     match cond.threshold.parse::<u8>() {
                         Ok(v) => thresholds.push(v),
                         Err(_) => {
@@ -1318,7 +1315,7 @@ impl Application for CASimulator {
                 if !errors.is_empty() {
                     self.rule_form_error = Some(errors.join("; "));
                 } else {
-                    let neighbor_state_name = if neighbor_ids.is_empty() {
+                    if neighbor_ids.is_empty() {
                         String::new()
                     } else {
                         let mut names: Vec<String> = Vec::with_capacity(neighbor_ids.len());
@@ -1362,7 +1359,6 @@ impl Application for CASimulator {
                         probability,
                     });
 
-                    // Reset form
                     self.rule_form_current_state = None;
                     self.rule_form_next_state = None;
                     self.rule_form_conditions.clear();
@@ -1401,7 +1397,6 @@ impl Application for CASimulator {
                         )
                         .ok();
 
-                        // --- STATES ---
                         writeln!(file, "STATE {{").ok();
                         for state in &self.states {
                             let r = (state.color.r * 255.0).round() as u8;
@@ -1412,7 +1407,6 @@ impl Application for CASimulator {
                         }
                         writeln!(file, "}}\n").ok();
 
-                        // --- RULES ---
                         writeln!(file, "RULES {{").ok();
                         for rule in &self.rules {
                             let conditions = rule.conditions_as_string();
@@ -1451,14 +1445,12 @@ impl Application for CASimulator {
                     if let Ok(file) = File::open(&path) {
                         let reader = BufReader::new(file);
 
-                        // Limpa estados e regras atuais
                         self.states.clear();
                         self.rules.clear();
 
                         let mut grid_width = 0;
                         let mut grid_height = 0;
 
-                        // Flags de contexto
                         let mut in_states = false;
                         let mut in_rules = false;
 
@@ -1536,7 +1528,6 @@ impl Application for CASimulator {
 
                 return Command::none();
             }
-            // --- Grid/Simulation Messages ---
             Message::ToggleFullscreen => {
                 self.fullscreen_mode = !self.fullscreen_mode;
             }
@@ -1549,11 +1540,16 @@ impl Application for CASimulator {
                     .grid_height_input
                     .parse()
                     .unwrap_or(DEFAULT_GRID_HEIGHT);
-                self.grid = CAGrid::new(width, height, self.states.clone());
+                self.grid = CAGrid::new(width, height, self.states.clone(), self.grid.neighborhood);
                 self.grid_cache.clear();
             }
             Message::ResetGrid => {
-                self.grid = CAGrid::new(self.grid.width, self.grid.height, self.states.clone());
+                self.grid = CAGrid::new(
+                    self.grid.width,
+                    self.grid.height,
+                    self.states.clone(),
+                    self.grid.neighborhood,
+                );
                 self.grid_cache.clear();
                 self.zoom.set(1.0);
                 self.offset = Point::new(0.0, 0.0).into();
@@ -1571,34 +1567,6 @@ impl Application for CASimulator {
                 let inv_value = 100.0 - value;
                 self.simulation_speed_ms = (10.0 + inv_value * 9.9) as u64;
             }
-            Message::CanvasEvent(event) => {
-                if let canvas::Event::Mouse(mouse_event) = event {
-                    match mouse_event {
-                        iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left) => {
-                            // lógica de clique opcional
-                        }
-                        iced::mouse::Event::WheelScrolled { delta } => {
-                            let factor = match delta {
-                                iced::mouse::ScrollDelta::Lines { y, .. } => y,
-                                iced::mouse::ScrollDelta::Pixels { y, .. } => y / 100.0,
-                            };
-
-                            let mut new_zoom = self.zoom.get();
-                            if factor > 0.0 {
-                                new_zoom *= 1.1;
-                            } else if factor < 0.0 {
-                                new_zoom /= 1.1;
-                            }
-
-                            // limitar zoom entre 0.1 e 10.0
-                            new_zoom = new_zoom.clamp(0.1, 10.0);
-
-                            self.zoom.set(new_zoom);
-                        }
-                        _ => {}
-                    }
-                }
-            }
             Message::PaintStateSelected(state) => {
                 self.selected_paint_state_id = state.id;
                 println!(
@@ -1615,7 +1583,7 @@ impl Application for CASimulator {
         Command::none()
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self) -> Element<'_, Message> {
         let header = text("Cellular Automata Modeler").size(30);
 
         let tab_buttons = row![
@@ -1633,15 +1601,12 @@ impl Application for CASimulator {
                 } else {
                     theme::Button::Secondary
                 }),
-            // button(text("Model Image")).on_press(Message::TabSelected(TabId::ModelImage))
-            //     .style(if self.active_tab == TabId::ModelImage { theme::Button::Primary } else { theme::Button::Secondary }),
         ]
         .spacing(10);
 
         let content = match self.active_tab {
             TabId::Definition => self.view_definition_tab(),
             TabId::Simulation => self.view_simulation_tab(),
-            // TabId::ModelImage => self.view_model_image_tab(),
         };
 
         column![header, tab_buttons, content]
@@ -1651,12 +1616,13 @@ impl Application for CASimulator {
     }
 
     fn theme(&self) -> Theme {
-        Theme::Dark // Or Theme::Light, or a custom one
+        Theme::Dark
     }
 
     fn subscription(&self) -> Subscription<Message> {
         if self.is_simulating {
-            iced::time::every(Duration::from_millis(self.simulation_speed_ms)).map(Message::Tick)
+            iced::time::every(Duration::from_millis(self.simulation_speed_ms))
+                .map(|_| Message::Tick(()))
         } else {
             Subscription::none()
         }
@@ -1664,7 +1630,7 @@ impl Application for CASimulator {
 }
 
 impl CASimulator {
-    fn view_definition_tab(&self) -> Element<Message> {
+    fn view_definition_tab(&self) -> Element<'_, Message> {
         let model_selector = column![
             text("Load Example Model").size(20),
             PickList::new(
@@ -1676,7 +1642,6 @@ impl CASimulator {
         ]
         .spacing(10)
         .width(Length::Fill);
-        // --- State Creation Panel ---
         let state_creation_panel = column![
             text("Create New State").size(20),
             text_input("State Name (e.g., Alive)", &self.new_state_name)
@@ -1766,41 +1731,31 @@ impl CASimulator {
             let cond = &self.rule_form_conditions[idx];
 
             let mut condition_row = row![
-                // Neighbor State
                 PickList::new(
                     available_states_for_picklist.clone(),
                     cond.neighbor_state.clone(),
-                    {
-                        let idx = idx;
-                        move |s| Message::RuleNeighborStateSelected(idx, s)
-                    }
+                    move |s| Message::RuleNeighborStateSelected(idx, s)
                 )
                 .placeholder("Neighbor State"),
-                // Operator
-                PickList::new(RelationalOperator::ALL.to_vec(), cond.operator, {
-                    let idx = idx;
-                    move |op| Message::RuleOperatorSelected(idx, op)
+                PickList::new(RelationalOperator::ALL.to_vec(), cond.operator, move |op| {
+                    Message::RuleOperatorSelected(idx, op)
                 })
                 .placeholder("Operator"),
-                // Threshold
                 text_input("Count (e.g., 3)", &cond.threshold)
-                    .on_input({
-                        let idx = idx;
-                        move |val| Message::RuleThresholdChanged(idx, val)
-                    })
+                    .on_input(move |val| Message::RuleThresholdChanged(idx, val))
                     .padding(5)
                     .width(Length::Fixed(80.0)),
-                // Remove condition button
                 button("-").on_press(Message::RemoveCondition(idx))
             ]
             .spacing(5);
 
             if idx < self.rule_form_conditions.len() - 1 {
                 condition_row = condition_row.push(
-                    PickList::new(ConditionCombiner::ALL.to_vec(), cond.combiner.clone(), {
-                        let idx = idx;
-                        move |comb| Message::RuleCombinerSelected(idx, comb)
-                    })
+                    PickList::new(
+                        ConditionCombiner::ALL.to_vec(),
+                        cond.combiner.clone(),
+                        move |comb| Message::RuleCombinerSelected(idx, comb),
+                    )
                     .placeholder("Combiner")
                     .width(Length::Fixed(80.0)),
                 );
@@ -1815,7 +1770,6 @@ impl CASimulator {
                 .padding(5),
         );
 
-        // Next State
         rule_creation_panel = rule_creation_panel.push(text("THEN Next State is:")).push(
             PickList::new(
                 available_states_for_picklist.clone(),
@@ -1885,7 +1839,7 @@ impl CASimulator {
             Scrollable::new(rules_list)
                 .height(Length::Fixed(200.0))
                 .width(Length::Fill),
-            export_import_row, // botão de exportação
+            export_import_row,
         ]
         .spacing(10)
         .width(Length::Fill);
@@ -1915,7 +1869,7 @@ impl CASimulator {
         .into()
     }
 
-    fn view_simulation_tab(&self) -> Element<Message> {
+    fn view_simulation_tab(&self) -> Element<'_, Message> {
         if self.fullscreen_mode {
             let controls = row![
                 button(if self.is_simulating { "Pause" } else { "Start" })
@@ -2028,25 +1982,7 @@ impl CASimulator {
         }
     }
 
-    // fn view_model_image_tab(&self) -> Element<Message> {
-    //     // This tab is for the "image of the created model".
-    //     // For now, it could just be a textual summary or a placeholder.
-    //     // A true graphical representation of rules/states (like a graph) is complex.
-    //     container(
-    //         text("Model Image / Summary (Placeholder)")
-    //             .horizontal_alignment(iced::alignment::Horizontal::Center)
-    //             .vertical_alignment(iced::alignment::Vertical::Center)
-    //     )
-    //     .width(Length::Fill)
-    //     .height(Length::Fill)
-    //     .center_x()
-    //     .center_y()
-    //     .into()
-    // }
-
     fn step_simulation_logic(&mut self) {
-        use rand::Rng;
-
         if self.states.is_empty() {
             return;
         }
@@ -2055,7 +1991,6 @@ impl CASimulator {
         let height = self.grid.height;
         let grid_size = width * height;
 
-        // Flattened grid para performance
         let current_grid_flat: Vec<u8> = self
             .grid
             .cells
@@ -2063,9 +1998,8 @@ impl CASimulator {
             .flat_map(|row| row.iter())
             .copied()
             .collect();
-        let mut next_grid_flat = current_grid_flat.clone();
+        let mut next_grid_flat = vec![0u8; grid_size];
 
-        // Pré-computa contagem de vizinhos para cada estado
         let mut neighbor_counts: Vec<Vec<u8>> = vec![vec![0; grid_size]; self.states.len()];
         for state in &self.states {
             let id = state.id as usize;
@@ -2076,25 +2010,76 @@ impl CASimulator {
             }
         }
 
-        let mut rng = rand::rng();
+        let threshold = 10_000;
 
-        for r in 0..height {
-            for c in 0..width {
-                let idx = r * width + c;
+        if grid_size >= threshold {
+            next_grid_flat
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(idx, cell)| {
+                    let current_cell_state_id = current_grid_flat[idx];
+                    let mut new_state_id = current_cell_state_id;
+
+                    let mut rng = rand::rng();
+
+                    for rule in &self.rules {
+                        if rule.current_state_id != current_cell_state_id {
+                            continue;
+                        }
+
+                        if rng.random::<f32>() > rule.probability {
+                            continue;
+                        }
+
+                        let final_result = if rule.neighbor_state_id_to_count.is_empty() {
+                            true
+                        } else {
+                            let mut res = true;
+                            for i in 0..rule.neighbor_state_id_to_count.len() {
+                                let neighbor_state = rule.neighbor_state_id_to_count[i] as usize;
+                                let op = rule.operator[i];
+                                let thr = rule.neighbor_count_threshold[i];
+
+                                let neighbor_count = neighbor_counts[neighbor_state][idx];
+                                let condition = op.evaluate(neighbor_count, thr);
+
+                                if i == 0 {
+                                    res = condition;
+                                } else {
+                                    match rule.combiner[i - 1] {
+                                        ConditionCombiner::And => res &= condition,
+                                        ConditionCombiner::Or => res |= condition,
+                                        ConditionCombiner::Xor => res ^= condition,
+                                    }
+                                }
+                            }
+                            res
+                        };
+
+                        if final_result {
+                            new_state_id = rule.next_state_id;
+                            break;
+                        }
+                    }
+
+                    *cell = new_state_id;
+                });
+        } else {
+            for idx in 0..grid_size {
                 let current_cell_state_id = current_grid_flat[idx];
                 let mut new_state_id = current_cell_state_id;
+
+                let mut rng = rand::rng();
 
                 for rule in &self.rules {
                     if rule.current_state_id != current_cell_state_id {
                         continue;
                     }
 
-                    // Probabilidade de ativação
                     if rng.random::<f32>() > rule.probability {
                         continue;
                     }
 
-                    // Avalia condições
                     let final_result = if rule.neighbor_state_id_to_count.is_empty() {
                         true
                     } else {
@@ -2130,18 +2115,16 @@ impl CASimulator {
             }
         }
 
-        // Reconstrói o grid 2D
         for r in 0..height {
             for c in 0..width {
                 self.grid.cells[r][c] = next_grid_flat[r * width + c];
             }
         }
 
-        self.grid_cache.clear(); // força redraw
+        self.grid_cache.clear();
     }
 }
 
-// Implement canvas::Program for CASimulator to draw the grid
 impl canvas::Program<Message> for CASimulator {
     type State = ();
 
@@ -2171,14 +2154,12 @@ impl canvas::Program<Message> for CASimulator {
                 let zoom = self.zoom.get().max(0.1);
                 let offset = self.offset.get();
 
-                // aplica primeiro o offset (panning), depois o zoom
                 frame.translate(Vector::new(offset.x, offset.y));
                 frame.scale(zoom);
 
                 let cell_width = frame.width() / self.grid.width as f32;
                 let cell_height = frame.height() / self.grid.height as f32;
 
-                // desenha as células
                 for r in 0..self.grid.height {
                     for c in 0..self.grid.width {
                         let state_id = self.grid.cells[r][c];
@@ -2195,35 +2176,40 @@ impl canvas::Program<Message> for CASimulator {
                     }
                 }
 
-                // desenha as linhas do grid apenas se as células forem grandes o suficiente
-                let min_cell_pixels = 3.0; // limite mínimo para desenhar linhas
-                if cell_width * zoom >= min_cell_pixels && cell_height * zoom >= min_cell_pixels {
-                    let base_stroke = 1.5; // espessura base
-                    let stroke_width = (base_stroke / zoom).clamp(0.5, 3.0);
+                let min_cell_pixels = 1.5;
+                let draw_horizontal = cell_height * zoom >= min_cell_pixels;
+                let draw_vertical = cell_width * zoom >= min_cell_pixels;
+
+                if draw_horizontal || draw_vertical {
+                    let stroke_width = (1.5 / zoom).clamp(0.5, 3.0);
                     let stroke_color = Color::from_rgb(0.2, 0.2, 0.2);
 
-                    // linhas horizontais
-                    for r in 0..=self.grid.height {
-                        let y = r as f32 * cell_height;
-                        let path = Path::line(Point::new(0.0, y), Point::new(frame.width(), y));
-                        frame.stroke(
-                            &path,
-                            Stroke::default()
-                                .with_width(stroke_width)
-                                .with_color(stroke_color),
-                        );
+                    // Linhas horizontais
+                    if draw_horizontal {
+                        for r in 0..=self.grid.height {
+                            let y = r as f32 * cell_height;
+                            let path = Path::line(Point::new(0.0, y), Point::new(frame.width(), y));
+                            frame.stroke(
+                                &path,
+                                Stroke::default()
+                                    .with_width(stroke_width)
+                                    .with_color(stroke_color),
+                            );
+                        }
                     }
 
-                    // linhas verticais
-                    for c in 0..=self.grid.width {
-                        let x = c as f32 * cell_width;
-                        let path = Path::line(Point::new(x, 0.0), Point::new(x, frame.height()));
-                        frame.stroke(
-                            &path,
-                            Stroke::default()
-                                .with_width(stroke_width)
-                                .with_color(stroke_color),
-                        );
+                    if draw_vertical {
+                        for c in 0..=self.grid.width {
+                            let x = c as f32 * cell_width;
+                            let path =
+                                Path::line(Point::new(x, 0.0), Point::new(x, frame.height()));
+                            frame.stroke(
+                                &path,
+                                Stroke::default()
+                                    .with_width(stroke_width)
+                                    .with_color(stroke_color),
+                            );
+                        }
                     }
                 }
             });
@@ -2239,9 +2225,8 @@ impl canvas::Program<Message> for CASimulator {
         bounds: Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> (canvas::event::Status, Option<Message>) {
-        match event {
-            canvas::Event::Mouse(mouse_event) => match mouse_event {
-                // Clique esquerdo -> pintar
+        if let canvas::Event::Mouse(mouse_event) = event {
+            match mouse_event {
                 iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left) => {
                     self.mouse_pressed.set(true);
                 }
@@ -2250,7 +2235,6 @@ impl canvas::Program<Message> for CASimulator {
                     *self.last_painted_cell.borrow_mut() = None;
                 }
 
-                // Clique direito -> iniciar panning
                 iced::mouse::Event::ButtonPressed(iced::mouse::Button::Right) => {
                     self.right_mouse_pressed.set(true);
                 }
@@ -2259,7 +2243,6 @@ impl canvas::Program<Message> for CASimulator {
                     *self.last_mouse_pos.borrow_mut() = None;
                 }
 
-                // Scroll do mouse -> zoom apenas se estiver sobre o canvas
                 iced::mouse::Event::WheelScrolled { delta } => {
                     if let Some(position) = cursor.position_in(bounds) {
                         let zoom_factor = match delta {
@@ -2272,7 +2255,6 @@ impl canvas::Program<Message> for CASimulator {
                         new_zoom = new_zoom.clamp(0.1, 10.0);
                         self.zoom.set(new_zoom);
 
-                        // Ajusta o offset para que o cursor permaneça no mesmo ponto do grid
                         let offset = self.offset.get();
                         let grid_x = (position.x - offset.x) / old_zoom;
                         let grid_y = (position.y - offset.y) / old_zoom;
@@ -2287,7 +2269,6 @@ impl canvas::Program<Message> for CASimulator {
                     }
                 }
 
-                // Movimento do mouse -> panning se botão direito pressionado
                 iced::mouse::Event::CursorMoved { position } => {
                     if self.right_mouse_pressed.get() {
                         self.grid_cache.clear();
@@ -2307,32 +2288,30 @@ impl canvas::Program<Message> for CASimulator {
                 }
 
                 _ => {}
-            },
-            _ => {}
+            }
         }
 
-        // Lógica de pintura (botão esquerdo)
-        if self.mouse_pressed.get() {
-            if let Some(position) = cursor.position_in(bounds) {
-                let offset = self.offset.get();
-                let adjusted_x = (position.x - offset.x) / self.zoom.get();
-                let adjusted_y = (position.y - offset.y) / self.zoom.get();
+        if self.mouse_pressed.get()
+            && let Some(position) = cursor.position_in(bounds)
+        {
+            let offset = self.offset.get();
+            let adjusted_x = (position.x - offset.x) / self.zoom.get();
+            let adjusted_y = (position.y - offset.y) / self.zoom.get();
 
-                let cell_width = bounds.width / self.grid.width as f32;
-                let cell_height = bounds.height / self.grid.height as f32;
+            let cell_width = bounds.width / self.grid.width as f32;
+            let cell_height = bounds.height / self.grid.height as f32;
 
-                let col = (adjusted_x / cell_width) as usize;
-                let row = (adjusted_y / cell_height) as usize;
+            let col = (adjusted_x / cell_width) as usize;
+            let row = (adjusted_y / cell_height) as usize;
 
-                if row < self.grid.height && col < self.grid.width {
-                    let mut last = self.last_painted_cell.borrow_mut();
-                    if last.map_or(true, |c| c != (row, col)) {
-                        *last = Some((row, col));
-                        return (
-                            canvas::event::Status::Captured,
-                            Some(Message::PaintCell(row, col, self.selected_paint_state_id)),
-                        );
-                    }
+            if row < self.grid.height && col < self.grid.width {
+                let mut last = self.last_painted_cell.borrow_mut();
+                if last.is_none() || last.unwrap() != (row, col) {
+                    *last = Some((row, col));
+                    return (
+                        canvas::event::Status::Captured,
+                        Some(Message::PaintCell(row, col, self.selected_paint_state_id)),
+                    );
                 }
             }
         }
