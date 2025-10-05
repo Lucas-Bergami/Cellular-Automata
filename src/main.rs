@@ -102,7 +102,7 @@ impl ConditionCombiner {
 pub enum ExampleModel {
     GameOfLife,
     Wireworld,
-    BrianBrain,
+    Greenberg,
     TuringPatterns,
     ForestFire,
 }
@@ -111,7 +111,7 @@ impl ExampleModel {
     pub const ALL: [ExampleModel; 5] = [
         ExampleModel::GameOfLife,
         ExampleModel::Wireworld,
-        ExampleModel::BrianBrain,
+        ExampleModel::Greenberg,
         ExampleModel::TuringPatterns,
         ExampleModel::ForestFire,
     ];
@@ -122,7 +122,7 @@ impl std::fmt::Display for ExampleModel {
         match self {
             ExampleModel::GameOfLife => write!(f, "Game of Life"),
             ExampleModel::Wireworld => write!(f, "Wireworld"),
-            ExampleModel::BrianBrain => write!(f, "Brian’s Brain"),
+            ExampleModel::Greenberg => write!(f, "Greenberg"),
             ExampleModel::TuringPatterns => write!(f, "Turing Patterns"),
             ExampleModel::ForestFire => write!(f, "Forest Fire"),
         }
@@ -1018,7 +1018,7 @@ impl Application for CASimulator {
                         ];
                     }
 
-                    ExampleModel::BrianBrain => {
+                    ExampleModel::Greenberg => {
                         self.states = vec![
                             CAState {
                                 id: 0,
@@ -1671,37 +1671,45 @@ impl CASimulator {
         .spacing(10)
         .width(Length::Fill);
 
-        let mut states_list = Column::new().spacing(10).width(Length::Fill);
-
-        for (idx, state) in self.states.iter().enumerate() {
-            states_list = states_list.push(
-                row![
-                    // Nome
-                    text(&state.name).width(Length::Fixed(120.0)),
-                    // Cor
-                    text(format!(
-                        "RGB: ({}, {}, {})",
-                        (state.color.r * 255.0) as u8,
-                        (state.color.g * 255.0) as u8,
-                        (state.color.b * 255.0) as u8
-                    ))
-                    .width(Length::Fixed(150.0)),
-                    // Peso
-                    text("Weight:").width(Length::Fixed(60.0)),
-                    text_input("Weight", &state.weight.to_string())
-                        .on_input(move |val| Message::StateWeightChanged(idx, val))
-                        .padding(5)
-                        .width(Length::Fixed(80.0)),
-                    // Remover
-                    button("Remove")
-                        .on_press(Message::RemoveState(idx))
-                        .style(theme::Button::Destructive)
-                        .padding(5),
-                ]
+        let states_list = if self.states.is_empty() {
+            Column::new()
+                .push(text("No states defined yet"))
                 .spacing(10)
-                .align_items(Alignment::Center),
-            );
-        }
+                .width(Length::Fill)
+        } else {
+            let mut column = Column::new().spacing(10).width(Length::Fill);
+            for (idx, state) in self.states.iter().enumerate() {
+                column = column.push(
+                    row![
+                        // Nome
+                        text(&state.name).width(Length::Fixed(120.0)),
+                        // Cor
+                        text(format!(
+                            "RGB: ({}, {}, {})",
+                            (state.color.r * 255.0) as u8,
+                            (state.color.g * 255.0) as u8,
+                            (state.color.b * 255.0) as u8
+                        ))
+                        .width(Length::Fixed(150.0)),
+                        // Peso
+                        text("Weight:").width(Length::Fixed(60.0)),
+                        text_input("Weight", &state.weight.to_string())
+                            .on_input(move |val| Message::StateWeightChanged(idx, val))
+                            .padding(5)
+                            .width(Length::Fixed(80.0)),
+                        // Remover
+                        button("Remove")
+                            .on_press(Message::RemoveState(idx))
+                            .style(theme::Button::Destructive)
+                            .padding(5),
+                    ]
+                    .spacing(10)
+                    .align_items(Alignment::Center),
+                );
+            }
+            column
+        };
+
         let states_panel = column![
             text("Defined States").size(20),
             Scrollable::new(states_list)
