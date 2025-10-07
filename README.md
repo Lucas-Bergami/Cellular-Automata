@@ -1,7 +1,7 @@
 # Simulador de Autômatos Celulares
 
 Este projeto implementa um **software interativo de simulação de autômatos celulares**, permitindo a criação, edição e execução de simulações personalizadas sem necessidade de conhecimento prévio em programação.  
-O sistema foi desenvolvido como parte do **Trabalho de Conclusão de Curso (TCC)** de **Lucas de Lima Bergami**, com o objetivo de **democratizar o acesso a experimentos e visualizações de autômatos celulares**.
+O sistema foi desenvolvido como parte do **Trabalho de Conclusão de Curso (TCC)** de **Lucas de Lima Bergami**, com o objetivo de **facilitar o acesso a experimentos e visualizações de autômatos celulares**.
 
 ---
 
@@ -43,6 +43,7 @@ Esse exemplo representa uma simulação de propagação de fogo em uma floresta,
 - Árvores (“Tree”) adjacentes a “Burning” pegam fogo com probabilidade 1.0;
 - Áreas vazias (“Empty”) podem gerar novas árvores com probabilidade 0.1.
 
+[Veja mais detalhes aqui](CAConfig.md)
 
 ## Interface Gráfica com a Biblioteca Iced (v0.12)
 
